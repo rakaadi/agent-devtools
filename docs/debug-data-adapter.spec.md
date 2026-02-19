@@ -1,10 +1,12 @@
 # Debug Data Adapter — Technical Specification
 
-> **Version:** 1.0
+> **Version:** 1.1
 > **Status:** Draft
-> **Last Updated:** 2026-02-17
+> **Last Updated:** 2026-02-19
 > **Parent Spec:** [Debug Data Adapter and MCP Server Specification](./Debug%20Data%20Adapter%20and%20MCP%20Server%20Specification.md)
 > **Sibling Spec:** [Agent DevTools MCP Server](./agent-devtools-mcp.spec.md)
+> **Monorepo package:** `packages/adapter` (`@agent-devtools/adapter`)
+> **Shared types package:** `packages/shared` (`@agent-devtools/shared`)
 
 ---
 
@@ -33,9 +35,11 @@ This document specifies the **Debug Data Adapter** — an in-app, DEV-only libra
 
 1. **App-agnostic.** The adapter does not import from any specific app. Consumer apps pass their data sources (store, navigation ref) via the public API.
 2. **Zero native dependencies.** Uses only React Native globals (`WebSocket`) and React (for the hook API). No additional RN packages to link.
-3. **DEV-only.** All code paths are gated by `__DEV__`. The adapter is a no-op in production — the entire module tree should be tree-shaken out.
+3. **DEV-only, defense-in-depth.** All code paths are gated by `__DEV__`. The adapter is a no-op in production — the entire module tree should be tree-shaken out. Despite DEV-only scope, the adapter validates data source inputs at init, sanitizes log output (no raw state dumping to console), and validates all incoming WebSocket messages against the wire protocol schema.
 4. **Non-invasive.** Subscribes to the same data sources the app already uses. Does not monkey-patch, wrap providers, or modify component trees beyond what the consumer explicitly opts into.
 5. **Redux-agnostic.** Works with any Redux-compatible store (plain Redux, RTK, RTK Query). RTK-specific metadata (e.g., `action.meta`) is captured when present, not required.
+6. **Fail-safe collectors.** Collector errors (e.g., `getState()` throws, `navigationRef.getCurrentRoute()` returns undefined) are caught and logged — they never crash the consumer app or propagate uncaught exceptions. A failed collector emits no event for that cycle; subsequent cycles proceed normally.
+7. **New Architecture compatible.** The adapter's API surface is pure JavaScript (Redux middleware, React Navigation listeners, WebSocket client). It uses no native modules, no bridge calls, and no UIManager interactions. This makes it compatible with both the classic architecture and React Native's New Architecture (Fabric renderer, TurboModules) without any conditional code paths.
 
 ---
 
@@ -54,14 +58,12 @@ devtools-mcp/                        # Repository root
 └── package.json                     # Workspace root
 ```
 
-**Package names** (tentative):
+**Package names:**
 - `@agent-devtools/adapter` — this package
 - `@agent-devtools/server` — MCP server
 - `@agent-devtools/shared` — shared types
 
-The `shared` package is the single source of truth for wire protocol message types and the `DebugEvent` envelope schema. Both `adapter` and `server` import from it.
-
-> **Note:** The MCP server spec (`agent-devtools-mcp.spec.md`) was written before the monorepo decision and assumes a flat `src/` layout. It will need a structural update to reflect the `packages/server/` path and the import of shared types from `@agent-devtools/shared`.
+The `shared` package is the single source of truth for wire protocol message types, `StreamName` / event type unions, and the `DebugEvent` envelope schema. Both `adapter` and `server` import from it.
 
 ---
 
@@ -165,6 +167,10 @@ interface DebugAdapterHandle {
 - If `__DEV__` is `false`, `initDebugAdapter()` returns a **no-op handle** — all methods are no-ops, no subscriptions are created, no WebSocket connection is attempted.
 - If `__DEV__` is `true`, the adapter starts immediately: creates collectors for each provided data source, starts the ring buffers, and initiates WebSocket connection to the MCP server.
 - Calling `initDebugAdapter()` multiple times is an error (logs a warning and returns the existing handle).
+- **Data source validation:** At init, the adapter performs runtime duck-type checks on provided data sources:
+  - `store` must have `getState` (function), `subscribe` (function), and `dispatch` (function). If any are missing, the Redux collector is skipped and a warning is logged.
+  - `navigationRef` must have `addListener` (function), `getCurrentRoute` (function), and `getRootState` (function). If any are missing, the Navigation collector is skipped and a warning is logged.
+  - Invalid or missing data sources do not prevent the adapter from starting — other collectors and the WebSocket transport still initialize.
 
 ### 4b) React Hook API
 
@@ -218,25 +224,25 @@ All configuration has sensible defaults. The consumer can override via the `conf
 
 ```typescript
 interface AdapterConfig {
-  /** MCP server WebSocket URL to connect to */
+  /** MCP server WebSocket URL to connect to. Must be ws:// or wss://. */
   serverUrl: string                // default: 'ws://127.0.0.1:19850'
 
-  /** Per-stream ring buffer capacity (number of events) */
+  /** Per-stream ring buffer capacity (number of events, 10–10_000) */
   bufferSize: number               // default: 200
 
-  /** Max event payload size in bytes before truncation */
+  /** Max event payload size in bytes before truncation (1024–524_288) */
   maxPayloadSize: number           // default: 51_200 (50 KB)
 
-  /** Max state snapshot size in bytes before truncation */
+  /** Max state snapshot size in bytes before truncation (1024–1_048_576) */
   maxSnapshotSize: number          // default: 204_800 (200 KB)
 
-  /** Max WebSocket message size in bytes */
+  /** Max WebSocket message size in bytes (1024–1_048_576). Must not exceed server's MAX_PAYLOAD_SIZE. */
   maxMessageSize: number           // default: 524_288 (512 KB)
 
-  /** Reconnection delay in ms (exponential backoff base) */
+  /** Reconnection delay in ms (exponential backoff base, 100–10_000) */
   reconnectBaseDelay: number       // default: 1000
 
-  /** Max reconnection delay in ms */
+  /** Max reconnection delay in ms (1000–60_000) */
   reconnectMaxDelay: number        // default: 30_000
 
   /** Streams to enable (allows disabling specific collectors) */
@@ -244,12 +250,19 @@ interface AdapterConfig {
 
   /** Enable verbose logging to console (DEV only) */
   debug: boolean                   // default: false
+
+  /** WebSocket connection timeout in ms (1000–30_000) */
+  connectTimeout: number           // default: 5000
 }
 ```
 
 ### Config validation
 
-Configuration is validated with Zod at initialization. Invalid values throw immediately with a descriptive error — fail fast, no silent fallbacks.
+Configuration is validated with Zod at initialization. Invalid values throw immediately with a descriptive error — fail fast, no silent fallbacks. Specific validations:
+- `serverUrl` must match `^wss?://` pattern.
+- Numeric fields are validated with min/max ranges (shown in comments above).
+- `enabledStreams` must contain at least one valid stream name.
+- `maxMessageSize` must be ≤ the server's `MAX_PAYLOAD_SIZE` (defaults are compatible: adapter 512 KB < server 1 MB).
 
 ---
 
@@ -318,17 +331,23 @@ interface DebugEvent {
 
 ### Size limits and truncation
 
-| Limit | Default | Configurable via |
-|---|---|---|
-| Max event payload | 50 KB | `config.maxPayloadSize` |
-| Max state snapshot | 200 KB | `config.maxSnapshotSize` |
-| Ring buffer per stream | 200 events | `config.bufferSize` |
-| Max WebSocket message | 512 KB | `config.maxMessageSize` |
+| Limit | Default | Configurable via | Measures |
+|---|---|---|---|
+| Max event payload | 50 KB | `config.maxPayloadSize` | UTF-8 byte length |
+| Max state snapshot | 200 KB | `config.maxSnapshotSize` | UTF-8 byte length |
+| Ring buffer per stream | 200 events | `config.bufferSize` | Event count |
+| Max WebSocket message | 512 KB | `config.maxMessageSize` | UTF-8 byte length |
 
-When a payload exceeds its size limit:
-1. The payload is truncated (deep properties removed, starting from the largest).
-2. `meta.truncated` is set to `true`.
-3. `meta.originalSize` is set to the pre-truncation size in bytes.
+> **Size measurement:** All byte-size limits measure the UTF-8 encoded length of the JSON-serialized value. The `sizeof` utility (§Phase 3) estimates this without full serialization for performance. Estimates target ±10% accuracy relative to `Buffer.byteLength(JSON.stringify(value), 'utf8')` (or the React Native equivalent using `TextEncoder`).
+
+When a payload exceeds its size limit, the truncation algorithm:
+1. Measures the serialized size of each top-level property in the payload.
+2. Sorts properties by size, descending.
+3. Removes the largest property and replaces it with `"[truncated]"`.
+4. Re-measures. Repeats until the payload fits within the limit.
+5. For array values that are too large: elements are removed from the end, and a `"[... N more items]"` sentinel is appended.
+6. `meta.truncated` is set to `true`.
+7. `meta.originalSize` is set to the pre-truncation byte size.
 
 ---
 
@@ -349,7 +368,9 @@ When a payload exceeds its size limit:
 
 2. **`state_snapshot`** — emitted on-demand when requested by the MCP server (via wire protocol), or periodically if configured. Not emitted on every action (performance).
 
-3. **`state_diff`** — emitted when the collector detects that a top-level slice key has changed. Uses shallow equality comparison on `getState()` keys. Only the changed slice path, previous value, and new value are included.
+3. **`state_diff`** — emitted when the collector detects that a top-level slice key has changed. Uses shallow equality comparison (`===`) on `getState()` top-level keys. Only the changed slice **key name** is recorded — the previous and new values for the changed slice are included, subject to `maxPayloadSize` truncation. If a single slice diff exceeds the payload limit, only the key name and a size indicator are emitted (no values).
+
+**Performance note:** The shallow comparison runs after every dispatched action. This is O(k) where k is the number of top-level state keys — typically <50 and very fast. Deep comparison is intentionally avoided.
 
 **Implementation approach:**
 
@@ -366,6 +387,9 @@ export function createReduxCollector(emit: EmitFn): {
 - `captureSnapshot()` calls `store.getState()`, measures size, truncates if needed, emits `state_snapshot`.
 - `state_diff` is computed by comparing the previous and current `getState()` result at the top-level keys after each action.
 - `destroy()` is a no-op for middleware (Redux doesn't support middleware removal). The middleware internally checks an `enabled` flag and short-circuits when disabled.
+- **Error handling:** If `getState()` throws during snapshot or diff, the error is caught and logged. No event is emitted for that cycle. The middleware continues processing subsequent actions normally.
+
+**Middleware detection for `createDebugMiddleware()`:** When a consumer uses the explicit `createDebugMiddleware()` export (§4c), the middleware sets a flag on the store via a unique symbol property (`Symbol.for('agent-devtools:middleware-attached')`). When `initDebugAdapter()` receives a `store`, it checks for this symbol before creating its own middleware. If the symbol is present, the adapter reuses the existing middleware's emit channel instead of injecting a second middleware.
 
 **Edge cases:**
 - Store with no middleware support (rare): log a warning, skip Redux collection.
@@ -408,6 +432,7 @@ export function createNavigationCollector(
 - Navigation ref not ready at init: deferred subscription (poll or listen for `ready` event).
 - Deeply nested navigators: `getRootState()` returns the full tree regardless of nesting.
 - Params with sensitive data: no redaction (per parent spec decision). The adapter transmits what the app contains.
+- **Error handling:** If `getCurrentRoute()` returns `undefined` (e.g., during navigator initialization), the `route_change` event is emitted with `routeName: 'unknown'` and `params: null`. If `getRootState()` throws, the snapshot request returns an `ADAPTER_ERROR` response via the wire protocol.
 
 ### 7c) MMKV Collector (Phase D1 — Deferred)
 
@@ -478,12 +503,16 @@ The adapter runs a WebSocket **client** that connects to the MCP server's WebSoc
 
 ### Connection lifecycle
 
-1. **Connect**: On adapter init, attempt to connect to `config.serverUrl` (default `ws://127.0.0.1:19850`).
+1. **Connect**: On adapter init, attempt to connect to `config.serverUrl` (default `ws://127.0.0.1:19850`). Connection attempt times out after `config.connectTimeout` (default 5000ms). If `config.serverUrl` does not match `^wss?://`, the connection is not attempted and a warning is logged.
 2. **Handshake**: On open, send a `HandshakeMessage` (defined in `@agent-devtools/shared`) with: `sessionId`, `adapterVersion`, enabled streams, and device info.
 3. **Ready**: On handshake acknowledgment, the transport is ready. Start accepting requests from the MCP server.
 4. **Requests**: The MCP server sends request messages (e.g., "get latest Redux snapshot"). The transport client routes them to the adapter core, which reads from ring buffers and responds.
 5. **Push events** (optional): When a new event is pushed into a ring buffer while a WebSocket connection is open, the transport can forward it to the MCP server for real-time awareness. This is optional and configurable.
 6. **Disconnect**: On WebSocket close/error, enter reconnection loop.
+
+### Keepalive
+
+The transport sends a lightweight ping frame every 30 seconds when the connection is idle (no messages sent in the last 30 seconds). If no pong is received within 10 seconds, the connection is considered dead and the reconnection loop begins. This detects silent disconnects (e.g., MCP server process crash without clean close).
 
 ### Reconnection
 
@@ -496,11 +525,11 @@ The adapter runs a WebSocket **client** that connects to the MCP server's WebSoc
 The transport client maintains a request ID → response callback map for pending requests. When a request comes in from the MCP server:
 
 1. Parse the message using the wire protocol schema from `@agent-devtools/shared`.
-2. Route to the appropriate handler based on request type (e.g., `get_snapshot`, `query_events`).
-3. The handler reads from ring buffers / snapshot slots and returns a response.
-4. Serialize the response and send it back over WebSocket.
-
-If a request type is unknown, respond with an error message (don't crash).
+2. If parsing fails (Zod validation error), log a warning with the error details and discard the message. Do not crash.
+3. Route to the appropriate handler based on request type (e.g., `get_snapshot`, `query_events`).
+4. The handler reads from ring buffers / snapshot slots and returns a response.
+5. If the handler throws, catch the error and respond with an `ErrorMessage` (wire protocol) containing the error details. The MCP server maps this to `ADAPTER_ERROR`.
+6. Serialize the response and send it back over WebSocket.
 
 ### Message size enforcement
 
@@ -531,14 +560,40 @@ The adapter's package entry point must be structured so that a production build 
 - All initialization is lazy (triggered by the consumer's explicit call).
 - The `package.json` should include `"sideEffects": false`.
 
+### WebSocket availability
+
+The adapter uses React Native's built-in `WebSocket` global (W3C-compatible API available in both JSC and Hermes). The adapter does NOT use Node.js `ws` at runtime. If `WebSocket` is not available in the global scope (e.g., SSR environments, certain test runners), the transport client is disabled and a warning is logged. Collectors and ring buffers still function — events are stored locally but cannot be transmitted.
+
+---
+
+## 10a) Security Considerations
+
+Although the adapter is DEV-only, it applies the following safeguards to align with the MCP server's defense-in-depth approach (see sibling spec §6):
+
+1. **Server URL validation**: `config.serverUrl` is validated to match `^wss?://` at init. Arbitrary URLs (e.g., `http://`, `ftp://`) are rejected.
+
+2. **Message validation**: All incoming WebSocket messages from the MCP server are validated against the wire protocol Zod schemas (imported from `@agent-devtools/shared`). Malformed messages are logged and discarded.
+
+3. **No raw state in logs**: When `config.debug` is `true`, the adapter logs event metadata (stream, event type, seq, payload size) but never logs raw state payloads. This prevents accidental exposure of sensitive app state in console output.
+
+4. **Payload size enforcement**: Outgoing messages are checked against `config.maxMessageSize` before sending. Oversized messages are truncated (not silently dropped) with `meta.truncated: true`.
+
+5. **Connection scope**: The adapter only connects to a single configured server URL. It does not broadcast, discover, or accept incoming connections.
+
 ---
 
 ## 11) Session Management
 
-- A `sessionId` is generated (UUIDv4) when `initDebugAdapter()` is called.
+- A `sessionId` is generated (UUIDv4 via `crypto.getRandomValues` — available in React Native's JSC and Hermes engines) when `initDebugAdapter()` is called. `Math.random` is NOT used as a fallback due to poor entropy.
 - The `sessionId` is stable for the lifetime of the adapter (until `destroy()` is called or the app restarts).
 - The `sessionId` is included in every `DebugEvent.sessionId` and in the WebSocket handshake.
 - On hot reload (React Native Fast Refresh), the adapter is re-initialized with a new session ID. This is expected — the MCP server detects a new handshake and resets its adapter state.
+
+### Hot reload cleanup
+
+When Fast Refresh re-executes module code, the previous adapter instance may still hold open WebSocket connections and collector subscriptions. To prevent leaks:
+- `initDebugAdapter()` checks for an existing global adapter instance (stored via a module-scoped variable). If found, it calls `destroy()` on the old instance before creating the new one.
+- This ensures that at most one adapter instance exists at any time, even across hot reloads.
 
 ---
 
@@ -608,7 +663,8 @@ packages/shared/
 
 | Package | Version | Purpose |
 |---|---|---|
-| `@agent-devtools/shared` | `workspace:*` | Wire protocol types, DebugEvent schema |
+| `@agent-devtools/shared` | `workspace:*` | Wire protocol types, DebugEvent schema, StreamName |
+| `zod` | `^3.24` | Config validation at init (§5) |
 
 **Peer dependencies:**
 
@@ -622,8 +678,8 @@ packages/shared/
 |---|---|---|
 | `typescript` | `^5.7` | Language |
 | `vitest` | `^3.0` | Test framework |
-| `zod` | `^3.24` | Schema validation (also used by shared) |
 | `ws` | `^8.18` | Mock WebSocket server for tests |
+| `@types/ws` | `^8.18` | WebSocket type definitions for tests |
 
 > **Why no `ws` runtime dep?** The adapter uses React Native's built-in `WebSocket` global at runtime. The `ws` package is only needed in tests to create a mock server in a Node.js environment.
 
@@ -654,19 +710,19 @@ packages/shared/
 
 | Module | Key assertions |
 |---|---|
-| `adapter.ts` | Init creates session, enable gate works, double-init warns, destroy cleans up |
+| `adapter.ts` | Init creates session, enable gate works, double-init warns (and destroys old instance), destroy cleans up, no-op in production, data source validation rejects invalid stores/refs |
 | `ring-buffer.ts` | FIFO eviction, seq monotonicity, query with filters, snapshot slot overwrite, stats accuracy |
-| `truncate.ts` | Payloads within limit pass through, oversized payloads truncated, `truncated` flag set, `originalSize` set |
-| `sizeof.ts` | Accurate size estimation for various payload shapes |
-| `redux.ts` | Middleware emits `action_dispatched` with correct shape, `captureSnapshot` emits `state_snapshot`, `state_diff` detects slice changes, enabled flag respected |
-| `navigation.ts` | Listener emits `route_change`, deferred subscription when ref not ready, `captureSnapshot` emits full tree, `destroy` unsubscribes |
-| `ws-client.ts` | Connects to server URL, sends handshake, routes incoming requests, reconnects on disconnect, respects max message size |
+| `truncate.ts` | Payloads within limit pass through, oversized payloads truncated, `truncated` flag set, `originalSize` set, array truncation appends sentinel |
+| `sizeof.ts` | Accurate size estimation for various payload shapes (within ±10% of `Buffer.byteLength(JSON.stringify(value), 'utf8')`) |
+| `redux.ts` | Middleware emits `action_dispatched` with correct shape, `captureSnapshot` emits `state_snapshot`, `state_diff` detects slice changes, enabled flag respected, middleware detection via symbol, `getState()` error caught and logged |
+| `navigation.ts` | Listener emits `route_change`, deferred subscription when ref not ready, `captureSnapshot` emits full tree, `destroy` unsubscribes, `getCurrentRoute()` returning undefined handled gracefully |
+| `ws-client.ts` | Connects to server URL, sends handshake, routes incoming requests, reconnects on disconnect with exponential backoff, respects max message size, keepalive ping/pong, rejects invalid server URL, handles malformed incoming messages |
 
 ### Integration tests
 
 | Test | Scenario |
 |---|---|
-| `adapter-to-server.test.ts` | Full round-trip: init adapter with mock store → adapter connects to mock WS server → dispatch Redux action → mock server receives push event → mock server sends snapshot request → adapter responds with state |
+| `adapter-to-server.test.ts` | Full round-trip: init adapter with mock store → adapter connects to mock WS server → dispatch Redux action → mock server receives push event → mock server sends snapshot request → adapter responds with state. Also: adapter responds with `ErrorMessage` when handler throws, adapter handles malformed server requests gracefully. |
 
 ### Test helpers
 
@@ -776,13 +832,13 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 **Title**: Implement fast JSON size estimation.
 
-**Description**: Create `packages/adapter/src/utils/sizeof.ts` with a `sizeof(value)` function that estimates the JSON-serialized byte size of a value without performing full serialization. Uses a recursive traversal with early termination when a threshold is exceeded. Write unit tests in `packages/adapter/tests/unit/sizeof.test.ts`.
+**Description**: Create `packages/adapter/src/utils/sizeof.ts` with a `sizeof(value)` function that estimates the UTF-8 byte length of a JSON-serialized value without performing full serialization. Uses a recursive traversal with early termination when a threshold is exceeded. In React Native, uses `TextEncoder` for accurate multi-byte character measurement on string leaves. Write unit tests in `packages/adapter/tests/unit/sizeof.test.ts`.
 
 **Depends on**: `adapter-scaffold`
 
 **Produces**: `packages/adapter/src/utils/sizeof.ts`, `packages/adapter/tests/unit/sizeof.test.ts`
 
-**Acceptance**: Unit tests pass. Estimates are within 10% of actual `JSON.stringify().length` for test payloads.
+**Acceptance**: Unit tests pass. Estimates are within ±10% of `Buffer.byteLength(JSON.stringify(value), 'utf8')` for test payloads.
 
 ---
 
@@ -790,7 +846,7 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 **Title**: Implement payload truncation.
 
-**Description**: Create `packages/adapter/src/utils/truncate.ts` with a `truncatePayload(payload, maxSize)` function that: measures the payload size (using `sizeof`), returns it unchanged if within limit, or progressively removes the largest nested properties until the payload fits. Returns `{ payload, truncated: boolean, originalSize: number }`. Write unit tests.
+**Description**: Create `packages/adapter/src/utils/truncate.ts` with a `truncatePayload(payload, maxSize)` function that: measures the payload size (using `sizeof`), returns it unchanged if within limit, or progressively removes the largest top-level properties (replacing with `"[truncated]"`) and trims arrays from the end (appending `"[... N more items]"` sentinel) until the payload fits. Returns `{ payload, truncated: boolean, originalSize: number }`. Write unit tests covering objects, arrays, nested structures, and edge cases (single large string value).
 
 **Depends on**: `util-sizeof`
 
@@ -804,7 +860,7 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 **Title**: Implement minimal UUIDv4 generator.
 
-**Description**: Create `packages/adapter/src/utils/uuid.ts` with a `uuid()` function that generates a UUIDv4 string. Use `crypto.getRandomValues` (available in React Native) or `Math.random` fallback. No external dependency. Write a basic unit test.
+**Description**: Create `packages/adapter/src/utils/uuid.ts` with a `uuid()` function that generates a UUIDv4 string using `crypto.getRandomValues` (available in React Native's JSC and Hermes engines). Do NOT use `Math.random` — it lacks sufficient entropy for session identifiers. If `crypto.getRandomValues` is unavailable (should not happen in RN), throw an error at init rather than silently degrading. Write a basic unit test.
 
 **Depends on**: `adapter-scaffold`
 
@@ -924,13 +980,13 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 **Title**: Implement WebSocket transport client.
 
-**Description**: Create `packages/adapter/src/transport/ws-client.ts` per §9. Export `createWsClient(config, handlers)` that returns `{ connect, disconnect, send, isConnected }`. Implements: connection to `config.serverUrl`, handshake on open, reconnection with exponential backoff, request routing to handler callbacks, push event forwarding, message size enforcement. Write unit tests using `mock-ws-server`.
+**Description**: Create `packages/adapter/src/transport/ws-client.ts` per §9. Export `createWsClient(config, handlers)` that returns `{ connect, disconnect, send, isConnected }`. Implements: server URL validation (`^wss?://`), connection to `config.serverUrl` with `config.connectTimeout`, handshake on open, reconnection with exponential backoff, request routing to handler callbacks, push event forwarding, message size enforcement, keepalive (ping every 30s, pong timeout 10s), incoming message validation against wire protocol Zod schemas. If `WebSocket` global is unavailable, logs a warning and returns a no-op client (all methods return immediately, `isConnected` always false). Write unit tests using `mock-ws-server`.
 
 **Depends on**: `shared-wire-protocol`, `util-truncate`, `test-mock-ws-server`
 
 **Produces**: `packages/adapter/src/transport/ws-client.ts`, `packages/adapter/tests/unit/transport/ws-client.test.ts`
 
-**Acceptance**: Unit tests pass. Client connects, reconnects, routes requests.
+**Acceptance**: Unit tests pass. Client connects, reconnects, routes requests, validates incoming messages, keepalive works.
 
 ---
 
@@ -1001,10 +1057,6 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 #### Phase D1 — MMKV Collector
 
 **Task `collector-mmkv`**: Implement the MMKV collector in `packages/adapter/src/collectors/mmkv.ts`. Wraps MMKV instances with a proxy for `set`/`delete` interception. Depends on a consumer app adopting `react-native-mmkv`.
-
-#### Phase D2 — Monorepo Server Migration
-
-**Task `server-monorepo-migration`**: Migrate the existing MCP server source (if implemented) from the flat `src/` layout into `packages/server/`. Update imports to use `@agent-devtools/shared` for wire protocol types. Update the MCP server spec to reflect the new structure.
 
 ---
 

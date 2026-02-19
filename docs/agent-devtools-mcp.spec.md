@@ -1,9 +1,11 @@
 # Agent DevTools MCP Server — Technical Specification
 
-> **Version:** 1.0
+> **Version:** 1.1
 > **Status:** Draft
-> **Last Updated:** 2026-02-17
+> **Last Updated:** 2026-02-19
 > **Parent Spec:** [Debug Data Adapter and MCP Server Specification](./Debug%20Data%20Adapter%20and%20MCP%20Server%20Specification.md)
+> **Monorepo package:** `packages/server` (`@agent-devtools/server`)
+> **Shared types package:** `packages/shared` (`@agent-devtools/shared`)
 
 ---
 
@@ -30,8 +32,9 @@ This document specifies the **MCP Debug Server** component only — a standalone
 
 1. **App-agnostic.** Any React Native app that implements the wire protocol can connect. No hardcoded assumptions about any specific app's store shape, navigation structure, or storage instances.
 2. **Stateless.** The MCP server holds no persistent state. All state lives in the connected app's ring buffers. The server is a translation layer between MCP clients and the app adapter.
-3. **Dev-only.** The server is a development tool. It binds to localhost only and makes no attempt to secure data beyond that boundary.
+3. **Dev-only, defense-in-depth.** The server is a development tool that binds to `127.0.0.1` by default. Despite localhost-only binding, the server applies defense-in-depth: Origin header validation on WebSocket connections, DNS rebinding protection, prototype-pollution-safe path resolution, and configurable rate limiting on adapter requests. If `WS_HOST` is changed to a non-loopback address, the server logs a security warning at startup.
 4. **Minimal dependencies.** Only add what's strictly necessary for the MCP protocol, WebSocket communication, and schema validation.
+5. **Monorepo-aware.** This server is the `@agent-devtools/server` package within a Bun workspace monorepo. Shared types (wire protocol messages, `DebugEvent` envelope) live in `@agent-devtools/shared` and are imported — never duplicated.
 
 ---
 
@@ -108,13 +111,36 @@ The wire protocol spec will define message shapes, error codes, and reconnection
 
 ## 3) MCP Tool Surface
 
-All tools use structured JSON input validated with Zod schemas. All tools return MCP-compliant `CallToolResult` with `content` arrays.
+All tools use structured JSON input validated with Zod schemas. All tools return MCP-compliant `CallToolResult` with both `content` arrays (text representation) and `structuredContent` (typed output for programmatic use). Each tool provides a `title`, comprehensive `description`, `inputSchema`, `outputSchema`, and `annotations`.
+
+### Tool annotations reference
+
+Every tool must declare annotations so MCP clients can reason about tool behavior:
+
+| Annotation | Description |
+|---|---|
+| `readOnlyHint` | `true` if the tool does not modify any state |
+| `destructiveHint` | `true` if the tool may perform destructive updates |
+| `idempotentHint` | `true` if repeated calls with the same args have no additional effect |
+| `openWorldHint` | `false` — all tools interact with a known, local debug adapter, not external entities |
+
+### Response format convention
+
+All tools that return data accept an optional `response_format` parameter (`'json' | 'markdown'`, default `'markdown'`). Markdown responses are optimized for agent context windows (human-readable headers, lists, formatted output). JSON responses include complete structured data. Regardless of `response_format`, `structuredContent` always contains the typed output object.
+
+### Response size limit
+
+A `CHARACTER_LIMIT` constant (default: `50_000` characters) caps the serialized text content of any tool response. If a response exceeds this limit, it is truncated with a clear message and a `truncated: true` field in `structuredContent`, along with guidance on using filters or pagination to retrieve the full data.
 
 ### 3a) `debug_health_check`
+
+**Title**: "Debug Health Check"
 
 **Purpose**: Check connection status and adapter capabilities.
 
 **Parameters**: None.
+
+**Annotations**: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
 **Returns**:
 
@@ -142,9 +168,13 @@ All tools use structured JSON input validated with Zod schemas. All tools return
 
 ### 3b) `debug_list_streams`
 
+**Title**: "List Debug Streams"
+
 **Purpose**: List available data streams and their status.
 
 **Parameters**: None.
+
+**Annotations**: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
 **Returns**:
 
@@ -167,7 +197,11 @@ All tools use structured JSON input validated with Zod schemas. All tools return
 
 ### 3c) `debug_get_snapshot`
 
+**Title**: "Get Debug Snapshot"
+
 **Purpose**: Retrieve the latest state snapshot for a given stream.
+
+**Annotations**: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
 **Parameters**:
 
@@ -185,7 +219,11 @@ All tools use structured JSON input validated with Zod schemas. All tools return
 
 ### 3d) `debug_query_events`
 
+**Title**: "Query Debug Events"
+
 **Purpose**: Query events from a stream's ring buffer with filtering and pagination.
+
+**Annotations**: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
 **Parameters**:
 
@@ -214,24 +252,33 @@ All tools use structured JSON input validated with Zod schemas. All tools return
 
 ### 3e) `debug_get_state_path`
 
-**Purpose**: Read a specific value from the Redux state tree by dot-notation path.
+**Title**: "Get State Path Value"
+
+**Purpose**: Read a specific value from a stream's state tree by dot-notation path. This is a convenience shorthand over `debug_get_snapshot` with `scope` — it always targets the latest snapshot and returns only the resolved value.
+
+**Annotations**: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
 **Parameters**:
 
-| Param | Type | Required | Description |
-|---|---|---|---|
-| `path` | `string` | Yes | Dot-notation path (e.g., `"api.queries"`, `"auth.user.role"`) |
+| Param | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `stream` | `'redux' \| 'navigation'` | No | `'redux'` | Target stream |
+| `path` | `string` | Yes | — | Dot-notation path (e.g., `"api.queries"`, `"auth.user.role"`, `"routes.0.name"`) |
 
 **Returns**: The value at the specified path, JSON-serialized.
 
 **Errors**:
 - `NOT_CONNECTED`: No adapter connected.
-- `STREAM_UNAVAILABLE`: Redux stream not active.
+- `STREAM_UNAVAILABLE`: Target stream not active.
 - `PATH_NOT_FOUND`: The path does not resolve to a value in the current state.
 
 ### 3f) `debug_diff_snapshots`
 
+**Title**: "Diff Debug Snapshots"
+
 **Purpose**: Compute a structural diff between two snapshots of the same stream.
+
+**Annotations**: `readOnlyHint: true`, `destructiveHint: false`, `idempotentHint: true`, `openWorldHint: false`
 
 **Parameters**:
 
@@ -240,6 +287,8 @@ All tools use structured JSON input validated with Zod schemas. All tools return
 | `stream` | `'redux' \| 'navigation' \| 'mmkv'` | Yes | Target stream |
 | `base_seq` | `number` | Yes | Sequence number of the base snapshot |
 | `target_seq` | `number` | Yes | Sequence number of the target snapshot |
+| `max_depth` | `number` | No | `10` | Maximum recursion depth for the diff algorithm (1–50). Deeper structures are reported as opaque `changed` entries. |
+| `max_changes` | `number` | No | `500` | Maximum number of change entries to return (1–2000). If exceeded, the response includes `truncated: true`. |
 
 **Returns**:
 
@@ -253,6 +302,8 @@ All tools use structured JSON input validated with Zod schemas. All tools return
   }[]
   baseSeq: number
   targetSeq: number
+  truncated: boolean         // True if max_changes was exceeded
+  totalChanges: number       // Actual number of changes detected (may be > changes.length)
 }
 ```
 
@@ -266,6 +317,8 @@ All tools use structured JSON input validated with Zod schemas. All tools return
 ## 4) MCP Resource Surface
 
 Resources provide read-only, URI-addressable access to current state. They are suitable for LLM context injection (e.g., "attach the current Redux state to this conversation").
+
+> **Note:** The `debug://` URI scheme is a custom scheme specific to this MCP server. It does not conflict with standard MCP resource schemes (`file://`, `https://`, etc.).
 
 ### 4a) Static resources
 
@@ -305,14 +358,15 @@ All tool and resource errors return structured responses. Tool errors use MCP's 
 | `SCOPE_NOT_FOUND` | The requested scope doesn't exist in the snapshot | 404 |
 | `SNAPSHOT_NOT_FOUND` | The requested sequence number doesn't correspond to a snapshot | 404 |
 | `INVALID_PARAMS` | Tool parameters failed Zod validation | 400 |
+| `ADAPTER_ERROR` | The connected adapter returned an error response | 502 |
+| `INTERNAL_ERROR` | Unexpected server-side error (catch-all) | 500 |
 
 ### Error response shape
 
 ```typescript
 interface ToolErrorResponse {
-  error: true
   code: string        // One of the codes above
-  message: string     // Human-readable description
+  message: string     // Human-readable description with actionable guidance
   details?: Record<string, unknown>
 }
 ```
@@ -324,7 +378,7 @@ return {
   isError: true,
   content: [{
     type: 'text',
-    text: JSON.stringify({ error: true, code: 'NOT_CONNECTED', message: '...' })
+    text: JSON.stringify({ code: 'NOT_CONNECTED', message: 'No app adapter is connected. Start your React Native app with the debug adapter enabled, then retry.' })
   }]
 }
 ```
@@ -337,10 +391,11 @@ The MCP server is configured via environment variables. All values have sensible
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `WS_PORT` | `number` | `19850` | Port for the WebSocket server (app adapter connects here) |
-| `WS_HOST` | `string` | `127.0.0.1` | Host to bind the WebSocket server to |
-| `REQUEST_TIMEOUT_MS` | `number` | `5000` | Timeout for requests sent to the app adapter |
-| `MAX_PAYLOAD_SIZE` | `number` | `524288` (512 KB) | Max WebSocket message size in bytes |
+| `WS_PORT` | `number` | `19850` | Port for the WebSocket server (1–65535). App adapter connects here. |
+| `WS_HOST` | `string` | `127.0.0.1` | Host to bind the WebSocket server to. **Security:** Changing to `0.0.0.0` exposes the server to the network — a warning is logged at startup. |
+| `REQUEST_TIMEOUT_MS` | `number` | `5000` | Timeout for requests sent to the app adapter (100–30000) |
+| `MAX_PAYLOAD_SIZE` | `number` | `1_048_576` (1 MB) | Max WebSocket message size in bytes (1024–10_485_760) |
+| `MAX_RESPONSE_CHARS` | `number` | `50_000` | Max character count for serialized tool response text content (1000–200_000). Responses exceeding this are truncated. |
 | `LOG_LEVEL` | `string` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 
 ### Configuration loading
@@ -349,45 +404,62 @@ Configuration is loaded once at startup from `process.env`, validated with Zod, 
 
 ```typescript
 const ConfigSchema = z.object({
-  WS_PORT: z.coerce.number().default(19850),
+  WS_PORT: z.coerce.number().int().min(1).max(65535).default(19850),
   WS_HOST: z.string().default('127.0.0.1'),
-  REQUEST_TIMEOUT_MS: z.coerce.number().default(5000),
-  MAX_PAYLOAD_SIZE: z.coerce.number().default(524_288),
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().min(100).max(30_000).default(5000),
+  MAX_PAYLOAD_SIZE: z.coerce.number().int().min(1024).max(10_485_760).default(1_048_576),
+  MAX_RESPONSE_CHARS: z.coerce.number().int().min(1000).max(200_000).default(50_000),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 })
 ```
+
+### Security hardening
+
+Even though this is a dev-only tool, the server applies defense-in-depth measures:
+
+1. **DNS rebinding protection**: The WebSocket server validates the `Host` header on incoming upgrade requests. Only `localhost`, `127.0.0.1`, `[::1]`, and the configured `WS_HOST` are accepted. Requests with other `Host` values are rejected with HTTP 403.
+
+2. **Origin validation**: The WebSocket server validates the `Origin` header on upgrade requests. Only requests without an `Origin` (local CLI tools) or with `Origin` matching the allowed hosts above are accepted.
+
+3. **Non-loopback warning**: If `WS_HOST` is set to a non-loopback address (anything other than `127.0.0.1`, `::1`, or `localhost`), the server logs a `warn`-level message at startup: `"WebSocket server bound to non-loopback address — debug data is exposed to the network."`.
+
+4. **Prototype pollution prevention**: The `resolveJsonPath` utility rejects path segments that match `__proto__`, `constructor`, or `prototype`. These paths return `PATH_NOT_FOUND`.
+
+5. **Message validation**: All incoming WebSocket messages are validated against the wire protocol Zod schemas. Malformed messages are logged and discarded — they do not crash the server or propagate errors to MCP clients.
+
+6. **Payload size enforcement**: The WebSocket server enforces `MAX_PAYLOAD_SIZE` at the `ws` library level. Messages exceeding this limit are dropped and the connection is closed.
 
 ---
 
 ## 7) Project Structure
 
+The MCP server lives in `packages/server/` within the monorepo. Shared types (wire protocol, DebugEvent) live in `packages/shared/` and are imported via the `@agent-devtools/shared` workspace dependency.
+
 ```
-devtools-mcp/
+packages/server/                      # @agent-devtools/server
 ├── src/
-│   ├── index.ts                  # Entry point: parse config, start server
-│   ├── server.ts                 # McpServer setup: tool + resource registration
+│   ├── index.ts                      # Entry point: parse config, start server
+│   ├── server.ts                     # McpServer setup: tool + resource registration
 │   ├── ws/
-│   │   ├── server.ts             # WebSocket server (ws library)
-│   │   └── connection-manager.ts # Track connected adapters, route requests
+│   │   ├── server.ts                 # WebSocket server (ws library)
+│   │   └── connection-manager.ts     # Track connected adapters, route requests
 │   ├── tools/
-│   │   ├── health-check.ts       # debug_health_check handler
-│   │   ├── list-streams.ts       # debug_list_streams handler
-│   │   ├── get-snapshot.ts       # debug_get_snapshot handler
-│   │   ├── query-events.ts       # debug_query_events handler
-│   │   ├── get-state-path.ts     # debug_get_state_path handler
-│   │   └── diff-snapshots.ts     # debug_diff_snapshots handler
+│   │   ├── health-check.ts           # debug_health_check handler
+│   │   ├── list-streams.ts           # debug_list_streams handler
+│   │   ├── get-snapshot.ts           # debug_get_snapshot handler
+│   │   ├── query-events.ts           # debug_query_events handler
+│   │   ├── get-state-path.ts         # debug_get_state_path handler
+│   │   └── diff-snapshots.ts         # debug_diff_snapshots handler
 │   ├── resources/
-│   │   ├── session.ts            # debug://session/current
-│   │   ├── redux-state.ts        # debug://redux/state
-│   │   └── navigation-state.ts   # debug://navigation/state
+│   │   ├── session.ts                # debug://session/current
+│   │   ├── redux-state.ts            # debug://redux/state
+│   │   └── navigation-state.ts      # debug://navigation/state
 │   ├── types/
-│   │   ├── debug-event.ts        # DebugEvent envelope type + Zod schema
-│   │   ├── errors.ts             # Error codes, error response builder
-│   │   ├── config.ts             # Config schema + loader
-│   │   └── wire-protocol.ts      # Wire protocol message types (shared with adapter)
+│   │   ├── errors.ts                 # Error codes, error response builder
+│   │   └── config.ts                 # Config schema + loader
 │   └── utils/
-│       ├── logger.ts             # Structured logger (respects LOG_LEVEL)
-│       └── json-path.ts          # Dot-notation path resolver for state trees
+│       ├── logger.ts                 # Structured logger (respects LOG_LEVEL)
+│       └── json-path.ts             # Dot-notation path resolver for state trees
 ├── tests/
 │   ├── unit/
 │   │   ├── config.test.ts
@@ -406,20 +478,24 @@ devtools-mcp/
 │   │   ├── tool-roundtrip.test.ts
 │   │   └── resource-roundtrip.test.ts
 │   └── helpers/
-│       ├── mock-adapter.ts       # Simulates an in-app adapter over WebSocket
-│       └── fixtures.ts           # Sample DebugEvent payloads
+│       ├── mock-adapter.ts           # Simulates an in-app adapter over WebSocket
+│       └── fixtures.ts               # Sample DebugEvent payloads
 ├── package.json
 ├── tsconfig.json
-├── eslint.config.ts
-├── vitest.config.ts
-├── .editorconfig
-├── AGENTS.md
-├── README.md
-└── docs/
-    ├── Debug Data Adapter and MCP Server Specification.md
-    ├── Development Tools MCP Research Report.md
-    └── agent-devtools-mcp.spec.md  (this file)
+├── tsconfig.build.json
+└── vitest.config.ts
+
+packages/shared/                      # @agent-devtools/shared (already exists)
+├── src/
+│   ├── index.ts                      # Re-exports all shared types
+│   ├── streams.ts                    # StreamName type, event type unions per stream
+│   ├── debug-event.ts                # DebugEvent envelope type + Zod schema
+│   └── wire-protocol.ts             # Wire protocol message types + Zod schemas
+├── package.json
+└── tsconfig.json
 ```
+
+**Note:** `types/debug-event.ts` and `types/wire-protocol.ts` from the original flat structure now live in `@agent-devtools/shared`. The server imports them — it does not duplicate them.
 
 ---
 
@@ -429,8 +505,9 @@ devtools-mcp/
 
 | Package | Version | Purpose |
 |---|---|---|
+| `@agent-devtools/shared` | `workspace:*` | Shared types: DebugEvent envelope, wire protocol messages, Zod schemas |
 | `@modelcontextprotocol/sdk` | `^1.26.0` | MCP protocol implementation (server + stdio transport) |
-| `zod` | `^3.24` | Schema validation for tool inputs, config, wire protocol messages |
+| `zod` | `^3.24` | Schema validation for tool inputs, config |
 | `ws` | `^8.18` | WebSocket server |
 
 ### Dev dependencies
@@ -470,11 +547,13 @@ devtools-mcp/
 ### Adapter connection lifecycle
 
 1. App adapter connects to WebSocket server.
-2. Adapter sends handshake message (per wire protocol).
-3. `ConnectionManager` validates handshake and registers the adapter.
-4. MCP tools/resources are now functional (they route through `ConnectionManager`).
-5. On disconnect, `ConnectionManager` removes the adapter. Tools return `NOT_CONNECTED` errors.
-6. Only **one adapter connection at a time** is supported in v1. A new connection replaces the existing one.
+2. WebSocket server validates `Host` and `Origin` headers (§6 security hardening). Rejects with HTTP 403 if validation fails.
+3. Adapter sends handshake message (per wire protocol).
+4. `ConnectionManager` validates handshake using wire protocol Zod schemas and registers the adapter.
+5. MCP tools/resources are now functional (they route through `ConnectionManager`).
+6. On disconnect, `ConnectionManager` removes the adapter. Tools return `NOT_CONNECTED` errors.
+7. Only **one adapter connection at a time** is supported in v1. A new connection replaces the existing one: all in-flight requests to the old adapter are rejected with `TIMEOUT`, the old WebSocket is closed with code `4001` ("replaced by new connection"), and the new adapter proceeds through the handshake flow.
+8. If the adapter sends a malformed message (fails Zod validation), the message is logged at `warn` level and discarded. The connection remains open — a single bad message does not terminate the session.
 
 ---
 
@@ -502,15 +581,23 @@ Use a `mock-adapter` helper that simulates an in-app adapter over a real WebSock
 
 | Test | Scenario |
 |---|---|
-| `ws-connection.test.ts` | Adapter connects, handshake validated, disconnect handled |
+| `ws-connection.test.ts` | Adapter connects, handshake validated, disconnect handled, connection replacement rejects in-flight requests |
 | `tool-roundtrip.test.ts` | MCP tool call → WebSocket request → mock adapter response → MCP result |
 | `resource-roundtrip.test.ts` | MCP resource read → WebSocket request → mock adapter response → MCP resource content |
 
 ### Contract tests
 
 - `DebugEvent` Zod schema validates sample payloads from all stream types.
+- Wire protocol message schemas validate handshake, request, response, and push event payloads.
 - Tool input schemas reject malformed parameters.
 - Tool output shapes conform to the documented response types.
+
+### Security tests
+
+- WebSocket server rejects connections with invalid `Host` header.
+- WebSocket server rejects connections with disallowed `Origin`.
+- `resolveJsonPath` rejects prototype-polluting path segments (`__proto__`, `constructor`, `prototype`).
+- Oversized WebSocket messages are dropped, connection closed.
 
 ---
 
@@ -529,17 +616,19 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 ### Phase 1 — Project Scaffolding
 
+> **Note:** The monorepo root (`package.json`, `.editorconfig`, `eslint.config.ts`) and the `packages/server/package.json` already exist. These tasks verify and augment the existing scaffolding rather than creating it from scratch.
+
 #### Task `scaffold-init`
 
-**Title**: Initialize project with package.json, tsconfig, and config files.
+**Title**: Verify and finalize server package configuration.
 
-**Description**: Set up the project root with `package.json` (bun-only enforcement via `packageManager` field), `tsconfig.json` (strict mode, ESM, Node types), `.editorconfig` (matching existing), and `eslint.config.ts` (matching project conventions). Install runtime and dev dependencies.
+**Description**: Verify `packages/server/package.json` has all required dependencies (§8), `tsconfig.json` and `tsconfig.build.json` are configured with strict mode and ESM. Ensure the `@agent-devtools/shared` workspace dependency is declared. Run `bun install` at the monorepo root to confirm dependency resolution.
 
 **Depends on**: Nothing.
 
-**Produces**: `package.json`, `tsconfig.json`, `eslint.config.ts`, `.editorconfig`, `bun.lock`
+**Produces**: Verified/updated `packages/server/package.json`, `packages/server/tsconfig.json`
 
-**Acceptance**: `bun install` succeeds. `bun run lint` runs without config errors (no source files to lint yet is OK).
+**Acceptance**: `bun install` succeeds at monorepo root. `bun run lint` runs without config errors.
 
 ---
 
@@ -551,7 +640,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Depends on**: `scaffold-init`
 
-**Produces**: `vitest.config.ts`, updated `package.json` (scripts)
+**Produces**: `packages/server/vitest.config.ts`, updated `packages/server/package.json` (scripts)
 
 **Acceptance**: `bun run test` runs (0 tests found is OK at this stage).
 
@@ -561,11 +650,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Create source directory structure.
 
-**Description**: Create the directory tree defined in §7: `src/`, `src/ws/`, `src/tools/`, `src/resources/`, `src/types/`, `src/utils/`, `tests/unit/`, `tests/unit/tools/`, `tests/integration/`, `tests/helpers/`. Create minimal placeholder `src/index.ts` that logs "server not yet implemented".
+**Description**: Create the directory tree defined in §7 under `packages/server/`: `src/`, `src/ws/`, `src/tools/`, `src/resources/`, `src/types/`, `src/utils/`, `tests/unit/`, `tests/unit/tools/`, `tests/integration/`, `tests/helpers/`. Create minimal placeholder `src/index.ts` that logs "server not yet implemented".
 
 **Depends on**: `scaffold-init`
 
-**Produces**: Directory tree, `src/index.ts` placeholder.
+**Produces**: Directory tree under `packages/server/`, `packages/server/src/index.ts` placeholder.
 
 **Acceptance**: `bun run src/index.ts` prints the placeholder message.
 
@@ -577,11 +666,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement configuration schema and loader.
 
-**Description**: Create `src/types/config.ts` with the `ConfigSchema` Zod object (§6), a `loadConfig()` function that reads `process.env` and returns a frozen, validated config object, and the `Config` type exported from the schema. Write unit tests in `tests/unit/config.test.ts` covering: defaults applied when env vars absent, env var overrides work, invalid values (non-numeric port, invalid log level) throw `ZodError`.
+**Description**: Create `packages/server/src/types/config.ts` with the `ConfigSchema` Zod object (§6), a `loadConfig()` function that reads `process.env` and returns a frozen, validated config object (including the non-loopback warning check per §6 security hardening), and the `Config` type exported from the schema. Write unit tests in `packages/server/tests/unit/config.test.ts` covering: defaults applied when env vars absent, env var overrides work, range validation (port out of range, negative timeout) throws `ZodError`.
 
 **Depends on**: `scaffold-src-dirs`
 
-**Produces**: `src/types/config.ts`, `tests/unit/config.test.ts`
+**Produces**: `packages/server/src/types/config.ts`, `packages/server/tests/unit/config.test.ts`
 
 **Acceptance**: `bun run test tests/unit/config.test.ts` — all tests pass.
 
@@ -591,11 +680,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement error codes and error response builder.
 
-**Description**: Create `src/types/errors.ts` with: an `ErrorCode` string union type matching §5, a `ToolErrorResponse` interface, a `buildToolError(code, message, details?)` function that returns a MCP-compliant `CallToolResult` with `isError: true`, and a `createToolError(code, message, details?)` shorthand. Write unit tests in `tests/unit/errors.test.ts` verifying each error code produces the correct shape.
+**Description**: Create `packages/server/src/types/errors.ts` with: an `ErrorCode` string union type matching §5 (including `ADAPTER_ERROR` and `INTERNAL_ERROR`), a `ToolErrorResponse` interface, a `buildToolError(code, message, details?)` function that returns a MCP-compliant `CallToolResult` with `isError: true`, and a `createToolError(code, message, details?)` shorthand. Error messages must include actionable guidance (e.g., "Start your React Native app with the debug adapter enabled, then retry."). Write unit tests in `packages/server/tests/unit/errors.test.ts` verifying each error code produces the correct shape.
 
 **Depends on**: `scaffold-src-dirs`
 
-**Produces**: `src/types/errors.ts`, `tests/unit/errors.test.ts`
+**Produces**: `packages/server/src/types/errors.ts`, `packages/server/tests/unit/errors.test.ts`
 
 **Acceptance**: `bun run test tests/unit/errors.test.ts` — all tests pass.
 
@@ -603,13 +692,13 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 #### Task `types-debug-event`
 
-**Title**: Define DebugEvent envelope type and Zod schema.
+**Title**: Define DebugEvent envelope type and Zod schema in shared package.
 
-**Description**: Create `src/types/debug-event.ts` with: the `DebugEvent` TypeScript interface matching the parent spec §5 envelope schema, a `DebugEventSchema` Zod object for runtime validation, and the stream-specific event type unions. This module is used for validating data received from the app adapter.
+**Description**: Create or update `packages/shared/src/debug-event.ts` with: the `DebugEvent` TypeScript interface matching the parent spec §5 envelope schema, a `DebugEventSchema` Zod object for runtime validation, and the stream-specific event type unions. Re-export from `packages/shared/src/index.ts`. This module is used by both the server (for validating adapter data) and the adapter (for constructing events).
 
 **Depends on**: `scaffold-src-dirs`
 
-**Produces**: `src/types/debug-event.ts`
+**Produces**: `packages/shared/src/debug-event.ts`, updated `packages/shared/src/index.ts`
 
 **Acceptance**: Lint passes. Types compile without errors.
 
@@ -617,13 +706,13 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 #### Task `types-wire-protocol`
 
-**Title**: Define wire protocol message types.
+**Title**: Define wire protocol message types in shared package.
 
-**Description**: Create `src/types/wire-protocol.ts` with TypeScript types for the wire protocol messages the MCP server sends and receives. This includes: `HandshakeMessage` (received from adapter on connect), `RequestMessage` (sent to adapter), `ResponseMessage` (received from adapter), `PushEventMessage` (received from adapter). Include Zod schemas for incoming messages. These types are the MCP server's view of the wire protocol — the full wire protocol spec is a separate document.
+**Description**: Create or update `packages/shared/src/wire-protocol.ts` with TypeScript types for the wire protocol messages the MCP server sends and receives. This includes: `HandshakeMessage` (received from adapter on connect), `RequestMessage` (sent to adapter), `ResponseMessage` (received from adapter), `PushEventMessage` (received from adapter). Include Zod schemas for incoming messages. Re-export from `packages/shared/src/index.ts`. These types are shared between `@agent-devtools/server` and `@agent-devtools/adapter` — the full wire protocol spec is a separate document.
 
 **Depends on**: `scaffold-src-dirs`, `types-debug-event`
 
-**Produces**: `src/types/wire-protocol.ts`
+**Produces**: `packages/shared/src/wire-protocol.ts`, updated `packages/shared/src/index.ts`
 
 **Acceptance**: Lint passes. Types compile without errors.
 
@@ -633,11 +722,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement structured logger.
 
-**Description**: Create `src/utils/logger.ts` with a minimal structured logger that respects the `LOG_LEVEL` config. Use `console.error` for output (keeps stdout clean for stdio MCP transport). Export a `createLogger(config)` function that returns an object with `debug`, `info`, `warn`, `error` methods. Each method outputs JSON-structured log lines to stderr.
+**Description**: Create `packages/server/src/utils/logger.ts` with a minimal structured logger that respects the `LOG_LEVEL` config. Use `console.error` for output (keeps stdout clean for stdio MCP transport). Export a `createLogger(config)` function that returns an object with `debug`, `info`, `warn`, `error` methods. Each method outputs JSON-structured log lines to stderr with fields: `level`, `ts` (ISO 8601), `msg`, and optional `data`.
 
 **Depends on**: `types-config`
 
-**Produces**: `src/utils/logger.ts`
+**Produces**: `packages/server/src/utils/logger.ts`
 
 **Acceptance**: Lint passes. Logger output goes to stderr, not stdout.
 
@@ -647,11 +736,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement dot-notation JSON path resolver.
 
-**Description**: Create `src/utils/json-path.ts` with a `resolveJsonPath(obj, path)` function that traverses an object by dot-notation path (e.g., `"auth.user.role"`) and returns the value or `undefined`. Handle edge cases: empty path (returns root), array indices (e.g., `"routes.0.name"`), null/undefined intermediate values. Write unit tests in `tests/unit/json-path.test.ts`.
+**Description**: Create `packages/server/src/utils/json-path.ts` with a `resolveJsonPath(obj, path)` function that traverses an object by dot-notation path (e.g., `"auth.user.role"`) and returns the value or `undefined`. Handle edge cases: empty path (returns root), array indices (e.g., `"routes.0.name"`), null/undefined intermediate values. **Security:** Reject path segments matching `__proto__`, `constructor`, or `prototype` — return `undefined` for these paths. Write unit tests in `packages/server/tests/unit/json-path.test.ts` including prototype pollution rejection tests.
 
 **Depends on**: `scaffold-src-dirs`
 
-**Produces**: `src/utils/json-path.ts`, `tests/unit/json-path.test.ts`
+**Produces**: `packages/server/src/utils/json-path.ts`, `packages/server/tests/unit/json-path.test.ts`
 
 **Acceptance**: `bun run test tests/unit/json-path.test.ts` — all tests pass.
 
@@ -663,11 +752,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement WebSocket server.
 
-**Description**: Create `src/ws/server.ts` that exports a `createWsServer(config, connectionManager)` function. It creates a `ws.WebSocketServer` bound to `config.WS_HOST:config.WS_PORT`. On new connections, it delegates to the `ConnectionManager`. It respects `config.MAX_PAYLOAD_SIZE` as the max message size. The function returns a handle with `close()` for graceful shutdown.
+**Description**: Create `packages/server/src/ws/server.ts` that exports a `createWsServer(config, connectionManager, logger)` function. It creates a `ws.WebSocketServer` bound to `config.WS_HOST:config.WS_PORT`. On upgrade requests, validates `Host` and `Origin` headers per §6 security hardening before accepting the connection. On new connections, it delegates to the `ConnectionManager`. It respects `config.MAX_PAYLOAD_SIZE` as the max message size. The function returns a handle with `close()` for graceful shutdown.
 
 **Depends on**: `types-config`, `ws-connection-manager`
 
-**Produces**: `src/ws/server.ts`
+**Produces**: `packages/server/src/ws/server.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
@@ -677,11 +766,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement connection manager.
 
-**Description**: Create `src/ws/connection-manager.ts` with a `ConnectionManager` class that: tracks the currently connected adapter (single connection, v1), validates handshake messages using the wire protocol Zod schema, provides `isConnected()` / `getAdapterInfo()` methods, implements a `request(type, params)` method that sends a request to the adapter over WebSocket and returns a Promise that resolves with the response (or rejects on timeout per `REQUEST_TIMEOUT_MS`), handles adapter disconnect (clears state, logs). Write unit tests in `tests/unit/connection-manager.test.ts` using a mock WebSocket.
+**Description**: Create `packages/server/src/ws/connection-manager.ts` with a `ConnectionManager` class that: tracks the currently connected adapter (single connection, v1), validates handshake messages using the wire protocol Zod schema (imported from `@agent-devtools/shared`), provides `isConnected()` / `getAdapterInfo()` methods, implements a `request(type, params)` method that sends a request to the adapter over WebSocket and returns a Promise that resolves with the response (or rejects on timeout per `REQUEST_TIMEOUT_MS`), handles adapter disconnect (clears state, logs), handles connection replacement (rejects in-flight requests, closes old connection with code `4001`), discards malformed incoming messages with a `warn` log. Write unit tests in `packages/server/tests/unit/connection-manager.test.ts` using a mock WebSocket.
 
 **Depends on**: `types-config`, `types-wire-protocol`, `util-logger`
 
-**Produces**: `src/ws/connection-manager.ts`, `tests/unit/connection-manager.test.ts`
+**Produces**: `packages/server/src/ws/connection-manager.ts`, `packages/server/tests/unit/connection-manager.test.ts`
 
 **Acceptance**: `bun run test tests/unit/connection-manager.test.ts` — all tests pass.
 
@@ -693,11 +782,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Create mock adapter test helper.
 
-**Description**: Create `tests/helpers/mock-adapter.ts` — a class that simulates an in-app debug adapter. It connects to the MCP server's WebSocket, sends a valid handshake, responds to requests with configurable payloads, and can simulate push events. This is the primary test utility for integration tests.
+**Description**: Create `packages/server/tests/helpers/mock-adapter.ts` — a class that simulates an in-app debug adapter. It connects to the MCP server's WebSocket, sends a valid handshake, responds to requests with configurable payloads, and can simulate push events. This is the primary test utility for integration tests.
 
 **Depends on**: `types-wire-protocol`, `types-debug-event`
 
-**Produces**: `tests/helpers/mock-adapter.ts`
+**Produces**: `packages/server/tests/helpers/mock-adapter.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
@@ -707,11 +796,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Create test fixtures.
 
-**Description**: Create `tests/helpers/fixtures.ts` with sample `DebugEvent` payloads for each stream type (Redux `action_dispatched`, `state_snapshot`; Navigation `route_change`, `navigation_snapshot`). Include sample state trees for `json-path` and `diff` testing.
+**Description**: Create `packages/server/tests/helpers/fixtures.ts` with sample `DebugEvent` payloads for each stream type (Redux `action_dispatched`, `state_snapshot`; Navigation `route_change`, `navigation_snapshot`). Include sample state trees for `json-path` and `diff` testing.
 
 **Depends on**: `types-debug-event`
 
-**Produces**: `tests/helpers/fixtures.ts`
+**Produces**: `packages/server/tests/helpers/fixtures.ts`
 
 **Acceptance**: Lint passes. Fixtures conform to `DebugEventSchema`.
 
@@ -723,11 +812,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug_health_check` tool.
 
-**Description**: Create `src/tools/health-check.ts` that exports a tool handler function. It queries `ConnectionManager` for connection status and adapter info, queries stream metadata, and returns the response shape from §3a. Write unit tests in `tests/unit/tools/health-check.test.ts` for connected and disconnected scenarios.
+**Description**: Create `packages/server/src/tools/health-check.ts` that exports a tool registration function. It queries `ConnectionManager` for connection status and adapter info, queries stream metadata, and returns the response shape from §3a. Register with `title`, `description`, `inputSchema`, `outputSchema`, and `annotations` per §3. Write unit tests in `packages/server/tests/unit/tools/health-check.test.ts` for connected and disconnected scenarios.
 
 **Depends on**: `ws-connection-manager`, `types-errors`
 
-**Produces**: `src/tools/health-check.ts`, `tests/unit/tools/health-check.test.ts`
+**Produces**: `packages/server/src/tools/health-check.ts`, `packages/server/tests/unit/tools/health-check.test.ts`
 
 **Acceptance**: `bun run test tests/unit/tools/health-check.test.ts` — all tests pass.
 
@@ -737,11 +826,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug_list_streams` tool.
 
-**Description**: Create `src/tools/list-streams.ts` per §3b. Sends a request to the adapter via `ConnectionManager.request()` to get stream metadata. Returns error if not connected. Write unit tests.
+**Description**: Create `packages/server/src/tools/list-streams.ts` per §3b. Sends a request to the adapter via `ConnectionManager.request()` to get stream metadata. Returns error if not connected. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
 
 **Depends on**: `ws-connection-manager`, `types-errors`
 
-**Produces**: `src/tools/list-streams.ts`, `tests/unit/tools/list-streams.test.ts`
+**Produces**: `packages/server/src/tools/list-streams.ts`, `packages/server/tests/unit/tools/list-streams.test.ts`
 
 **Acceptance**: Unit tests pass.
 
@@ -751,11 +840,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug_get_snapshot` tool.
 
-**Description**: Create `src/tools/get-snapshot.ts` per §3c. Accepts `stream` and optional `scope` parameters. Sends request to adapter, applies scope filtering using `resolveJsonPath` if provided. Handles all error cases. Write unit tests.
+**Description**: Create `packages/server/src/tools/get-snapshot.ts` per §3c. Accepts `stream` and optional `scope` parameters. Sends request to adapter, applies scope filtering using `resolveJsonPath` if provided. Handles all error cases. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
 
 **Depends on**: `ws-connection-manager`, `types-errors`, `util-json-path`
 
-**Produces**: `src/tools/get-snapshot.ts`, `tests/unit/tools/get-snapshot.test.ts`
+**Produces**: `packages/server/src/tools/get-snapshot.ts`, `packages/server/tests/unit/tools/get-snapshot.test.ts`
 
 **Acceptance**: Unit tests pass.
 
@@ -765,11 +854,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug_query_events` tool.
 
-**Description**: Create `src/tools/query-events.ts` per §3d. Validates and clamps `limit` parameter. Sends request with filters to adapter. Returns paginated event list. Write unit tests.
+**Description**: Create `packages/server/src/tools/query-events.ts` per §3d. Validates and clamps `limit` parameter. Sends request with filters to adapter. Returns paginated event list. Applies `MAX_RESPONSE_CHARS` truncation. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
 
 **Depends on**: `ws-connection-manager`, `types-errors`, `types-debug-event`
 
-**Produces**: `src/tools/query-events.ts`, `tests/unit/tools/query-events.test.ts`
+**Produces**: `packages/server/src/tools/query-events.ts`, `packages/server/tests/unit/tools/query-events.test.ts`
 
 **Acceptance**: Unit tests pass.
 
@@ -779,11 +868,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug_get_state_path` tool.
 
-**Description**: Create `src/tools/get-state-path.ts` per §3e. Requests full Redux state snapshot from adapter, resolves the dot-notation path using `resolveJsonPath`, returns the value. Handles `PATH_NOT_FOUND`. Write unit tests.
+**Description**: Create `packages/server/src/tools/get-state-path.ts` per §3e. Accepts optional `stream` parameter (defaults to `'redux'`). Requests the latest state snapshot from the adapter for the target stream, resolves the dot-notation path using `resolveJsonPath`, returns the value. Handles `PATH_NOT_FOUND`. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
 
 **Depends on**: `ws-connection-manager`, `types-errors`, `util-json-path`
 
-**Produces**: `src/tools/get-state-path.ts`, `tests/unit/tools/get-state-path.test.ts`
+**Produces**: `packages/server/src/tools/get-state-path.ts`, `packages/server/tests/unit/tools/get-state-path.test.ts`
 
 **Acceptance**: Unit tests pass.
 
@@ -793,11 +882,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug_diff_snapshots` tool.
 
-**Description**: Create `src/tools/diff-snapshots.ts` per §3f. Requests two snapshots by sequence number from the adapter, computes a structural diff (added/removed/changed keys), returns the diff. Implement the diff algorithm in the tool handler itself (simple recursive object comparison — no external diff library). Write unit tests.
+**Description**: Create `packages/server/src/tools/diff-snapshots.ts` per §3f. Requests two snapshots by sequence number from the adapter, computes a structural diff (added/removed/changed keys), returns the diff. Implement the diff algorithm in the tool handler itself (simple recursive object comparison — no external diff library). Respect `max_depth` and `max_changes` parameters to bound computation. Register with `title`, `annotations`, and `outputSchema`. Write unit tests including depth-limit and truncation behavior.
 
 **Depends on**: `ws-connection-manager`, `types-errors`
 
-**Produces**: `src/tools/diff-snapshots.ts`, `tests/unit/tools/diff-snapshots.test.ts`
+**Produces**: `packages/server/src/tools/diff-snapshots.ts`, `packages/server/tests/unit/tools/diff-snapshots.test.ts`
 
 **Acceptance**: Unit tests pass.
 
@@ -809,11 +898,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug://session/current` resource.
 
-**Description**: Create `src/resources/session.ts` that registers a static MCP resource. When read, it queries `ConnectionManager` for adapter info and returns session metadata. Returns error if not connected.
+**Description**: Create `packages/server/src/resources/session.ts` that registers a static MCP resource at `debug://session/current`. When read, it queries `ConnectionManager` for adapter info and returns session metadata. Returns error if not connected.
 
 **Depends on**: `ws-connection-manager`, `types-errors`
 
-**Produces**: `src/resources/session.ts`
+**Produces**: `packages/server/src/resources/session.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
@@ -823,11 +912,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug://redux/state` resource.
 
-**Description**: Create `src/resources/redux-state.ts` that registers a static MCP resource. When read, requests the latest Redux state snapshot from the adapter and returns it as JSON text content.
+**Description**: Create `packages/server/src/resources/redux-state.ts` that registers a static MCP resource at `debug://redux/state`. When read, requests the latest Redux state snapshot from the adapter and returns it as JSON text content. Applies `MAX_RESPONSE_CHARS` truncation.
 
 **Depends on**: `ws-connection-manager`, `types-errors`
 
-**Produces**: `src/resources/redux-state.ts`
+**Produces**: `packages/server/src/resources/redux-state.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
@@ -837,11 +926,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement `debug://navigation/state` resource.
 
-**Description**: Create `src/resources/navigation-state.ts` that registers a static MCP resource for the latest navigation state.
+**Description**: Create `packages/server/src/resources/navigation-state.ts` that registers a static MCP resource at `debug://navigation/state` for the latest navigation state.
 
 **Depends on**: `ws-connection-manager`, `types-errors`
 
-**Produces**: `src/resources/navigation-state.ts`
+**Produces**: `packages/server/src/resources/navigation-state.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
@@ -853,11 +942,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Assemble MCP server with all tools and resources.
 
-**Description**: Create `src/server.ts` that exports a `createMcpServer(connectionManager)` function. It instantiates `McpServer` from `@modelcontextprotocol/sdk`, registers all 6 tools (§3) with their Zod input schemas and handler functions, and registers all 3 resources (§4). Returns the configured `McpServer` instance.
+**Description**: Create `packages/server/src/server.ts` that exports a `createMcpServer(connectionManager, config)` function. It instantiates `McpServer` from `@modelcontextprotocol/sdk` using `server.registerTool()` (not deprecated `server.tool()`), registers all 6 tools (§3) with their Zod `inputSchema`, `outputSchema`, `title`, `description`, and `annotations`, and registers all 3 resources (§4). Returns the configured `McpServer` instance.
 
 **Depends on**: All `tool-*` tasks, all `resource-*` tasks.
 
-**Produces**: `src/server.ts`
+**Produces**: `packages/server/src/server.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
@@ -867,11 +956,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Implement main entry point.
 
-**Description**: Update `src/index.ts` to implement the full startup sequence (§9): load config, create `ConnectionManager`, start WebSocket server, create MCP server, connect to `StdioServerTransport`, register shutdown handlers (`SIGINT`, `SIGTERM`). This is the runnable entry point.
+**Description**: Update `packages/server/src/index.ts` to implement the full startup sequence (§9): load config (including non-loopback warning), create `ConnectionManager`, start WebSocket server (with security hardening), create MCP server, connect to `StdioServerTransport`, register shutdown handlers (`SIGINT`, `SIGTERM`). This is the runnable entry point.
 
 **Depends on**: `server-assembly`, `ws-server`, `types-config`, `util-logger`
 
-**Produces**: `src/index.ts` (updated)
+**Produces**: `packages/server/src/index.ts` (updated)
 
 **Acceptance**: `bun run src/index.ts` starts the server, logs startup info to stderr, WebSocket server is listening.
 
@@ -883,11 +972,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Write WebSocket connection integration tests.
 
-**Description**: Create `tests/integration/ws-connection.test.ts`. Start the real WebSocket server, connect the mock adapter, verify handshake is validated, verify disconnect is handled, verify that a second connection replaces the first.
+**Description**: Create `packages/server/tests/integration/ws-connection.test.ts`. Start the real WebSocket server, connect the mock adapter, verify handshake is validated, verify disconnect is handled, verify that a second connection replaces the first (old connection's in-flight requests rejected), verify Host/Origin header validation rejects disallowed values.
 
 **Depends on**: `entry-point`, `test-mock-adapter`
 
-**Produces**: `tests/integration/ws-connection.test.ts`
+**Produces**: `packages/server/tests/integration/ws-connection.test.ts`
 
 **Acceptance**: `bun run test tests/integration/ws-connection.test.ts` — all tests pass.
 
@@ -897,11 +986,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Write MCP tool roundtrip integration tests.
 
-**Description**: Create `tests/integration/tool-roundtrip.test.ts`. Start the full server (WebSocket + MCP), connect mock adapter, invoke each MCP tool via the MCP SDK client, verify the round-trip: tool call → WebSocket request → mock adapter response → MCP result. Test at least: `debug_health_check` (connected), `debug_get_snapshot` (with mock Redux state), `debug_query_events` (with mock events), and a disconnected-adapter error case.
+**Description**: Create `packages/server/tests/integration/tool-roundtrip.test.ts`. Start the full server (WebSocket + MCP), connect mock adapter, invoke each MCP tool via the MCP SDK client, verify the round-trip: tool call → WebSocket request → mock adapter response → MCP result. Test at least: `debug_health_check` (connected), `debug_get_snapshot` (with mock Redux state), `debug_query_events` (with mock events), and a disconnected-adapter error case.
 
 **Depends on**: `entry-point`, `test-mock-adapter`, `test-fixtures`
 
-**Produces**: `tests/integration/tool-roundtrip.test.ts`
+**Produces**: `packages/server/tests/integration/tool-roundtrip.test.ts`
 
 **Acceptance**: `bun run test tests/integration/tool-roundtrip.test.ts` — all tests pass.
 
@@ -911,11 +1000,11 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Title**: Write MCP resource roundtrip integration tests.
 
-**Description**: Create `tests/integration/resource-roundtrip.test.ts`. Similar to tool roundtrip but for resources. Connect mock adapter, read each resource URI via MCP client, verify content matches mock adapter data.
+**Description**: Create `packages/server/tests/integration/resource-roundtrip.test.ts`. Similar to tool roundtrip but for resources. Connect mock adapter, read each resource URI via MCP client, verify content matches mock adapter data.
 
 **Depends on**: `entry-point`, `test-mock-adapter`, `test-fixtures`
 
-**Produces**: `tests/integration/resource-roundtrip.test.ts`
+**Produces**: `packages/server/tests/integration/resource-roundtrip.test.ts`
 
 **Acceptance**: `bun run test tests/integration/resource-roundtrip.test.ts` — all tests pass.
 
@@ -961,7 +1050,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 #### Phase D2 — Streamable HTTP Transport (Phase 4 per parent spec)
 
-**Task `transport-http`**: Add Streamable HTTP as an alternative MCP transport. Configurable via env var (e.g., `MCP_TRANSPORT=http`). Uses `NodeStreamableHTTPServerTransport` from `@modelcontextprotocol/sdk` on port `3100`. The WebSocket server remains unchanged.
+**Task `transport-http`**: Add Streamable HTTP as an alternative MCP transport. Configurable via env var (e.g., `MCP_TRANSPORT=http`). Uses `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk/server/streamableHttp.js` on port `3100`. The WebSocket server remains unchanged.
 
 **Task `transport-http-tests`**: Integration tests for HTTP transport.
 
