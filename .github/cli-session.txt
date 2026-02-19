@@ -1,0 +1,2 @@
+Spec initialization
+copilot --resume=266624a4-a46c-4519-99cd-5094bc571f3e
