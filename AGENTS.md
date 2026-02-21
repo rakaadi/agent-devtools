@@ -44,9 +44,17 @@ This section define the project convention that should be take onto account when
 
 This project is a MCP (Model Context Protocol) server that let AI agents to read data directly from the Redux Toolkit Query store, React Navigation state, and MMKV storage layers of an Expo React Native app, enhanced their capability to perform tasks such as debugging, feature implementation, and code refactoring with direct access to the app's internal state and data. Thus, enabling the agents to directly verfiy their work and perform self-correction without explicit user feedback, and significantly improving their performance and reliability in handling complex development tasks.
 
-**Stack:** MCP Typescript SDK,
+**Stack:** MCP Typescript SDK, zod, ws (websocket), vitest.
 
 **Always** take into account the dependencies version, use the latest pattern supported by the current version of the dependencies, and make sure the pattern or API is compatible with React Native. **Never** suggest an deprecated pattern or API that is no longer supported by the current version of the dependencies.
+
+### Specification Files
+
+Initial specification are located in the [`docs`](./docs) folder.
+1. [`agent-devtools-mcp.spec.md`](./docs/agent-devtools-mcp.spec.md): The main specification file for the MCP server, outlining the architecture, data flow, and key components.
+2. [`debug-data-adapter.spec.md`](./docs/debug-data-adapter.spec.md): Specification for the debug data adapter, which is responsible for transforming the app's internal state into a format that can be consumed by the MCP server.
+
+When needed, refer to these specification files for any architectural or design questions, and to ensure that your implementation aligns with the expected structure and behavior of the MCP server.
 
 ### Package Manager
 
@@ -86,6 +94,36 @@ Skills are automatically available through the symlink at `./.skills/` which poi
 
 #### Required Workflow
 
+##### Test-Driven Development
+
+This project follows a strict test-driven development (TDD) approach. For any new feature, bug fix, or refactor. You **MUST** follow the TDD cycle:
+
+1. Red Phase: Write a failing test that defines the expected behavior or reproduces the bug.
+2. Green Phase: Implement the minimal code necessary to make the test pass, avoid adding any extra functionality or optimizations at this stage.
+3. Refactor Phase: Refactor the code to improve readability, maintainability, or performance, while ensuring that all tests continue to pass.
+
+Best Practices
+1. **Write Tests First** - Always TDD
+2. **One Assert Per Test** - Focus on single behavior
+3. **Descriptive Test Names** - Explain what's tested
+4. **Arrange-Act-Assert** - Clear test structure
+5. **Mock External Dependencies** - Isolate unit tests
+6. **Test Edge Cases** - Null, undefined, empty, large
+7. **Test Error Paths** - Not just happy paths
+8. **Keep Tests Fast** - Unit tests < 50ms each
+9. **Clean Up After Tests** - No side effects
+10. **Review Coverage Reports** - Identify gaps
+
+Success Metrics
+- 80%+ code coverage achieved
+- All tests passing (green)
+- No skipped or disabled tests
+- Fast test execution (< 30s for unit tests)
+- E2E tests cover critical user flows
+- Tests catch bugs before production
+
+**Remember**: Tests are not optional. They are the safety net that enables confident refactoring, rapid development, and production reliability.
+
 For ANY MCP server development task:
 
 1. **Load foundation** → Invoke `mcp-builder` skill
@@ -100,6 +138,7 @@ For ANY MCP server development task:
 | Task Type | Required Skill(s) | Trigger Phrases |
 |-----------|------------------|-----------------|
 | Any MCP server work | `mcp-builder` | Always (foundation skill) |
+| Test writing and TDD | `tdd` | "write tests", "test-driven development", "TDD", precede any code changes |
 | General typescript types and utilities | `typescript-advanced-types` | "type definitions", "utility types", "advanced typescript" |
 | Adding documentation | `art-of-comment` | "document", "add comments", final step of any task |
 
