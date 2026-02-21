@@ -1,0 +1,30 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# build artifacts
+*.apk
+*.aab
+*.ipa
+
+# temporary file
+tmp.json
+
+# Code review Analysis
+docs/review/*
