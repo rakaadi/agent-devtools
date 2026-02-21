@@ -3,11 +3,6 @@
 # dependencies
 node_modules/
 
-# debug
-npm-debug.*
-yarn-debug.*
-yarn-error.*
-
 # macOS
 .DS_Store
 *.pem
@@ -16,15 +11,18 @@ yarn-error.*
 .env*.local
 
 # typescript
+dist/
+build/
 *.tsbuildinfo
 
-# build artifacts
-*.apk
-*.aab
-*.ipa
+# Test coverage
+coverage/
 
 # temporary file
 tmp.json
+tmp/
+temp/
+*.tmp
 
 # Code review Analysis
 docs/review/*

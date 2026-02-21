@@ -7,11 +7,25 @@ import { defineConfig } from 'eslint/config'
 
 export default defineConfig([
   {
+    name: 'devtools-mcp-eslint',
     files: ['**/*.{js,mjs,cjs,ts,mts,cts}'],
     plugins: { js },
     extends: ['js/recommended'],
     languageOptions: {
       globals: globals.node,
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: {
+          allowDefaultProject: [
+            '*.js',
+            '*.mjs',
+            '*.cjs',
+            '*.ts',
+          ],
+        },
+        tsconfigRootDir: import.meta.dirname,
+        ecmaVersion: 'latest',
+      },
     },
   },
   tseslint.configs.recommended,
