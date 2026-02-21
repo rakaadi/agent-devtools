@@ -28,3 +28,6 @@ tmp.json
 
 # Code review Analysis
 docs/review/*
+
+# Specification files
+docs/spec/*
