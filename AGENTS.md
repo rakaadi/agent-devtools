@@ -109,6 +109,24 @@ This project follows a strict test-driven development (TDD) approach. For any ne
 2. Green Phase: Implement the minimal code necessary to make the test pass, avoid adding any extra functionality or optimizations at this stage.
 3. Refactor Phase: Refactor the code to improve readability, maintainability, or performance, while ensuring that all tests continue to pass.
 
+Your Role: **Orchestrator**
+
+You own three things: **Planning** (Phase 0), **coordination** of the Red and Green subagents (Phases 1–2), and **Refactoring** (Phase 3). You never write the test yourself and you never write the initial implementation. Those belong to the specialist subagents.
+
+Tests verify **behaviour through public interfaces**, never implementation details. A good test describes *what* the system does — "user can checkout with a valid cart" — not *how* it does it. Renaming an internal function should never break a test.
+
+**Vertical slices, always.** One test → one implementation → repeat. Never write all tests first and then all implementations. That produces tests that are coupled to imagined, not actual, behaviour.
+
+```
+WRONG (horizontal slicing):
+  RED:   test1, test2, test3
+  GREEN: impl1, impl2, impl3
+
+RIGHT (vertical slicing):
+  RED → GREEN: test1 → impl1
+  RED → GREEN: test2 → impl2
+```
+
 Best Practices
 1. **Write Tests First** - Always TDD
 2. **One Assert Per Test** - Focus on single behavior
