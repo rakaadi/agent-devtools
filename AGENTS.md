@@ -149,6 +149,136 @@ Success Metrics
 
 **Remember**: Tests are not optional. They are the safety net that enables confident refactoring, rapid development, and production reliability.
 
+##### Phase 0: Planning (Your Responsibility)
+
+When the user presents a feature request, work through the following before invoking any subagent.
+
+**Step 1 — Understand the codebase.** Use `#tool:search/codebase` and `#tool:search` to locate relevant files, existing interfaces, and related tests. Do not plan in a vacuum.
+
+**Step 2 — Design the public interface.** Decide what the new or changed public interface should look like. Favour the smallest surface area that satisfies the requirement — deep modules with simple interfaces, as the TDD skill's `interface-design.md` describes.
+
+**Step 3 — Identify the behaviour to test.** List the specific, observable, user-facing behaviours that matter. Confirm the list with the user. One behaviour per TDD cycle — do not batch them.
+
+**Step 4 — Produce the handoff context.** Before invoking the Red subagent, prepare this exact block:
+
+```
+### Handoff Context for Red Subagent
+
+**Feature:** [One sentence]
+**Files likely involved:**
+  - `src/...` — [reason]
+  - `tests/...` — [where the test should live]
+**Public interface being targeted:** [function signature / component API / endpoint]
+**Behaviour to test (this cycle):** [ONE observable, user-facing outcome]
+**What a passing test looks like:** [assertion described in plain language]
+**Test runner:** [vitest | jest]
+```
+
+---
+
+##### Phase 1: Red (Delegated to Red Subagent)
+
+Invoke the Red agent as a subagent using the `#tool:agent` tool. Pass the full handoff context from Phase 0 as the subagent prompt.
+
+The Red subagent will return a structured report containing the test file path, the exact test name, and the terminal output confirming the failure. Read the terminal with `#tool:read/terminalLastCommand` to independently verify.
+
+**Do not proceed to Green unless all of the following are true:**
+
+- A test file exists at the reported path
+- The terminal shows a test failure — not a syntax error, not a config error
+- The failure reason is "feature not implemented" — the test fails because the code doesn't exist yet, not because the test itself is broken
+
+If validation fails, re-invoke the Red subagent with a correction note explaining what needs to be fixed.
+
+Once validated, present the failure report to the user and show the **"✅ Confirm failure — proceed to Green phase"** handoff button. Wait for the user to confirm before continuing — this is an intentional human-in-the-loop gate.
+
+---
+
+##### Phase 2: Green (Delegated to Green Subagent)
+
+After user confirmation, invoke the Green agent as a subagent using `#tool:agent`. Pass the following handoff context:
+
+```
+### Handoff Context for Green Subagent
+
+**Failing test:**
+  - File: [path from Red subagent report]
+  - Test name: [exact test name]
+  - Failure output: [terminal output from Red phase]
+**Feature to implement:** [same description from Phase 0]
+**Public interface:** [same interface spec from Phase 0]
+**Test runner:** [vitest | jest]
+```
+
+After the Green subagent returns, verify the test is passing:
+
+```bash
+npx vitest run <test-file-path> --reporter=verbose
+```
+
+**Do not proceed to Refactor unless:**
+
+- The specific test from Phase 1 is now passing
+- No previously passing tests have been broken
+- The Green subagent only modified implementation files — test files must be untouched
+
+---
+
+##### Phase 3: Refactor (Your Responsibility)
+
+Now that all tests are green, improve the code without changing behaviour. Run the full suite after every individual change — never refactor in bulk.
+
+Use the notes in the Green subagent's report (the "Refactor Candidates" section) as your starting point. Common targets include extracted duplication, single-responsibility violations, magic values that should be named constants, and module boundaries that could be simplified.
+
+```bash
+# After each individual refactor step
+npx vitest run
+```
+
+After each change, confirm: does the test from Phase 1 still pass? Do all other tests still pass? If anything breaks, you have accidentally changed behaviour — revert that step and try a smaller change.
+
+---
+
+##### Final Report
+
+```
+## TDD Cycle Complete ✅
+
+### Feature Implemented
+[Brief description]
+
+### Behaviour Tested
+[The behaviour from Phase 0, in plain language]
+
+### Test
+- **File:** `path/to/test.spec.ts`
+- **Name:** "exact test name"
+- **Red result:** ❌ FAILED — [error summary]
+- **Green result:** ✅ PASSED
+
+### Refactors Applied
+[List of changes, or "None needed"]
+
+### Files Modified
+- `path/to/implementation.ts` — [what changed]
+- `path/to/test.spec.ts` — [what was added]
+
+### Full Suite
+✅ [X/X] tests passing
+```
+
+---
+
+## Hard Rules
+
+🚨 Install and read the TDD skill before any phase begins — not after.  
+🚨 Never write tests yourself — that is the Red subagent's job.  
+🚨 Never write the initial implementation — that is the Green subagent's job.  
+🚨 Never refactor while RED — get to GREEN first, always.  
+🚨 Never skip the human confirmation gate between Red and Green.  
+🚨 Never invoke a subagent without a complete, explicit handoff context.
+
+
 #### Skill Invocation Matrix
 
 **You MUST invoke these skills before proceeding with the task:**
