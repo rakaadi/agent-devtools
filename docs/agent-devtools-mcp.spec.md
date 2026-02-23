@@ -605,12 +605,19 @@ Use a `mock-adapter` helper that simulates an in-app adapter over a real WebSock
 
 This section defines the fine-grained, dependency-ordered task breakdown for AI agent execution. Each task specifies the files to create/modify, what the task produces, and what it depends on.
 
+All tasks that produce both implementation code and tests follow a **strict Test-Driven Development (TDD)** workflow. These tasks are split into two sub-tasks:
+
+- **Red (`-red`)**: Write the test first. The test defines the expected public interface and observable behaviour. The acceptance criterion is that the test **fails** because the implementation does not exist yet — not because of syntax or configuration errors.
+- **Green (`-green`)**: Write the minimal implementation code to make the failing test pass, then refactor while keeping tests green. The acceptance criterion is that **all** tests pass and no previously passing tests are broken.
+
+Tasks are always executed as **vertical slices**: one Red → one Green → repeat. Never batch all Red tasks before starting Green tasks.
+
 ### Legend
 
-- **ID**: Unique task identifier (used for dependency tracking).
+- **ID**: Unique task identifier (used for dependency tracking). Suffixed with `-red` or `-green` for TDD sub-tasks.
 - **Depends on**: Task IDs that must be completed first.
 - **Produces**: Files created or modified.
-- **Acceptance**: How to verify the task is done.
+- **Acceptance**: How to verify the task is done. For `-red` tasks, this is a test failure for the right reason. For `-green` tasks, this is all tests passing.
 
 ---
 
@@ -662,31 +669,59 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 ### Phase 2 — Core Types and Utilities
 
-#### Task `types-config`
+#### Task `types-config-red`
 
-**Title**: Implement configuration schema and loader.
+**Title**: Write failing tests for configuration schema and loader.
 
-**Description**: Create `packages/server/src/types/config.ts` with the `ConfigSchema` Zod object (§6), a `loadConfig()` function that reads `process.env` and returns a frozen, validated config object (including the non-loopback warning check per §6 security hardening), and the `Config` type exported from the schema. Write unit tests in `packages/server/tests/unit/config.test.ts` covering: defaults applied when env vars absent, env var overrides work, range validation (port out of range, negative timeout) throws `ZodError`.
+**Description**: Write unit tests in `packages/server/tests/unit/config.test.ts` that define the expected behaviour of the configuration module. Tests should cover: defaults applied when env vars are absent, env var overrides work, range validation (port out of range, negative timeout) throws `ZodError`, and the `Config` type shape. Import from the not-yet-existing `../src/types/config.ts` — the tests must fail because the module does not exist.
 
-**Depends on**: `scaffold-src-dirs`
+**Depends on**: `scaffold-src-dirs`, `scaffold-vitest`
 
-**Produces**: `packages/server/src/types/config.ts`, `packages/server/tests/unit/config.test.ts`
+**Produces**: `packages/server/tests/unit/config.test.ts`
 
-**Acceptance**: `bun run test tests/unit/config.test.ts` — all tests pass.
+**Acceptance**: `bun run test tests/unit/config.test.ts` — tests **fail** because `config.ts` does not exist (import/module error), not because of test syntax errors.
 
 ---
 
-#### Task `types-errors`
+#### Task `types-config-green`
 
-**Title**: Implement error codes and error response builder.
+**Title**: Implement configuration schema and loader to pass tests.
 
-**Description**: Create `packages/server/src/types/errors.ts` with: an `ErrorCode` string union type matching §5 (including `ADAPTER_ERROR` and `INTERNAL_ERROR`), a `ToolErrorResponse` interface, a `buildToolError(code, message, details?)` function that returns a MCP-compliant `CallToolResult` with `isError: true`, and a `createToolError(code, message, details?)` shorthand. Error messages must include actionable guidance (e.g., "Start your React Native app with the debug adapter enabled, then retry."). Write unit tests in `packages/server/tests/unit/errors.test.ts` verifying each error code produces the correct shape.
+**Description**: Create `packages/server/src/types/config.ts` with the `ConfigSchema` Zod object (§6), a `loadConfig()` function that reads `process.env` and returns a frozen, validated config object (including the non-loopback warning check per §6 security hardening), and the `Config` type exported from the schema. Write the minimal code needed to make all `config.test.ts` tests pass. After tests are green, refactor for clarity (e.g., extract constants, improve naming) while keeping all tests passing.
 
-**Depends on**: `scaffold-src-dirs`
+**Depends on**: `types-config-red`
 
-**Produces**: `packages/server/src/types/errors.ts`, `packages/server/tests/unit/errors.test.ts`
+**Produces**: `packages/server/src/types/config.ts`
 
-**Acceptance**: `bun run test tests/unit/errors.test.ts` — all tests pass.
+**Acceptance**: `bun run test tests/unit/config.test.ts` — all tests pass. No previously passing tests broken.
+
+---
+
+#### Task `types-errors-red`
+
+**Title**: Write failing tests for error codes and error response builder.
+
+**Description**: Write unit tests in `packages/server/tests/unit/errors.test.ts` that define the expected behaviour of the error module. Tests should verify: each `ErrorCode` value produces the correct `CallToolResult` shape with `isError: true`, `buildToolError` includes actionable guidance in messages, and `createToolError` shorthand works correctly. Import from the not-yet-existing `../src/types/errors.ts`.
+
+**Depends on**: `scaffold-src-dirs`, `scaffold-vitest`
+
+**Produces**: `packages/server/tests/unit/errors.test.ts`
+
+**Acceptance**: `bun run test tests/unit/errors.test.ts` — tests **fail** because `errors.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `types-errors-green`
+
+**Title**: Implement error codes and error response builder to pass tests.
+
+**Description**: Create `packages/server/src/types/errors.ts` with: an `ErrorCode` string union type matching §5 (including `ADAPTER_ERROR` and `INTERNAL_ERROR`), a `ToolErrorResponse` interface, a `buildToolError(code, message, details?)` function that returns a MCP-compliant `CallToolResult` with `isError: true`, and a `createToolError(code, message, details?)` shorthand. Error messages must include actionable guidance (e.g., "Start your React Native app with the debug adapter enabled, then retry."). Write the minimal code to make all `errors.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `types-errors-red`
+
+**Produces**: `packages/server/src/types/errors.ts`
+
+**Acceptance**: `bun run test tests/unit/errors.test.ts` — all tests pass. No previously passing tests broken.
 
 ---
 
@@ -724,25 +759,37 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Create `packages/server/src/utils/logger.ts` with a minimal structured logger that respects the `LOG_LEVEL` config. Use `console.error` for output (keeps stdout clean for stdio MCP transport). Export a `createLogger(config)` function that returns an object with `debug`, `info`, `warn`, `error` methods. Each method outputs JSON-structured log lines to stderr with fields: `level`, `ts` (ISO 8601), `msg`, and optional `data`.
 
-**Depends on**: `types-config`
+**Depends on**: `types-config-green`
 
 **Produces**: `packages/server/src/utils/logger.ts`
 
 **Acceptance**: Lint passes. Logger output goes to stderr, not stdout.
 
+#### Task `util-json-path-red`
+
+**Title**: Write failing tests for dot-notation JSON path resolver.
+
+**Description**: Write unit tests in `packages/server/tests/unit/json-path.test.ts` that define the expected behaviour of `resolveJsonPath(obj, path)`. Tests should cover: traversing by dot-notation (e.g., `"auth.user.role"`), empty path returns root, array indices (e.g., `"routes.0.name"`), null/undefined intermediate values return `undefined`, and **security:** paths containing `__proto__`, `constructor`, or `prototype` segments return `undefined` (prototype pollution rejection). Import from the not-yet-existing `../src/utils/json-path.ts`.
+
+**Depends on**: `scaffold-src-dirs`, `scaffold-vitest`
+
+**Produces**: `packages/server/tests/unit/json-path.test.ts`
+
+**Acceptance**: `bun run test tests/unit/json-path.test.ts` — tests **fail** because `json-path.ts` does not exist (import/module error), not because of test syntax errors.
+
 ---
 
-#### Task `util-json-path`
+#### Task `util-json-path-green`
 
-**Title**: Implement dot-notation JSON path resolver.
+**Title**: Implement dot-notation JSON path resolver to pass tests.
 
-**Description**: Create `packages/server/src/utils/json-path.ts` with a `resolveJsonPath(obj, path)` function that traverses an object by dot-notation path (e.g., `"auth.user.role"`) and returns the value or `undefined`. Handle edge cases: empty path (returns root), array indices (e.g., `"routes.0.name"`), null/undefined intermediate values. **Security:** Reject path segments matching `__proto__`, `constructor`, or `prototype` — return `undefined` for these paths. Write unit tests in `packages/server/tests/unit/json-path.test.ts` including prototype pollution rejection tests.
+**Description**: Create `packages/server/src/utils/json-path.ts` with a `resolveJsonPath(obj, path)` function that traverses an object by dot-notation path and returns the value or `undefined`. Handle edge cases per the test expectations. Write the minimal code to make all `json-path.test.ts` tests pass, then refactor while keeping tests green.
 
-**Depends on**: `scaffold-src-dirs`
+**Depends on**: `util-json-path-red`
 
-**Produces**: `packages/server/src/utils/json-path.ts`, `packages/server/tests/unit/json-path.test.ts`
+**Produces**: `packages/server/src/utils/json-path.ts`
 
-**Acceptance**: `bun run test tests/unit/json-path.test.ts` — all tests pass.
+**Acceptance**: `bun run test tests/unit/json-path.test.ts` — all tests pass. No previously passing tests broken.
 
 ---
 
@@ -754,25 +801,37 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Create `packages/server/src/ws/server.ts` that exports a `createWsServer(config, connectionManager, logger)` function. It creates a `ws.WebSocketServer` bound to `config.WS_HOST:config.WS_PORT`. On upgrade requests, validates `Host` and `Origin` headers per §6 security hardening before accepting the connection. On new connections, it delegates to the `ConnectionManager`. It respects `config.MAX_PAYLOAD_SIZE` as the max message size. The function returns a handle with `close()` for graceful shutdown.
 
-**Depends on**: `types-config`, `ws-connection-manager`
+**Depends on**: `types-config-green`, `ws-connection-manager-green`
 
 **Produces**: `packages/server/src/ws/server.ts`
 
 **Acceptance**: Lint passes. Types compile.
 
+#### Task `ws-connection-manager-red`
+
+**Title**: Write failing tests for connection manager.
+
+**Description**: Write unit tests in `packages/server/tests/unit/connection-manager.test.ts` using a mock WebSocket that define the expected behaviour of the `ConnectionManager` class. Tests should cover: tracking a connected adapter (single connection, v1), validating handshake messages using the wire protocol Zod schema, `isConnected()` / `getAdapterInfo()` methods, `request(type, params)` method resolving with adapter response or rejecting on timeout per `REQUEST_TIMEOUT_MS`, adapter disconnect clearing state, connection replacement (rejecting in-flight requests, closing old connection with code `4001`), and discarding malformed incoming messages with a warning. Import from the not-yet-existing `../src/ws/connection-manager.ts`.
+
+**Depends on**: `scaffold-vitest`, `types-config-green`, `types-wire-protocol`, `util-logger`
+
+**Produces**: `packages/server/tests/unit/connection-manager.test.ts`
+
+**Acceptance**: `bun run test tests/unit/connection-manager.test.ts` — tests **fail** because `connection-manager.ts` does not exist (import/module error), not because of test syntax errors.
+
 ---
 
-#### Task `ws-connection-manager`
+#### Task `ws-connection-manager-green`
 
-**Title**: Implement connection manager.
+**Title**: Implement connection manager to pass tests.
 
-**Description**: Create `packages/server/src/ws/connection-manager.ts` with a `ConnectionManager` class that: tracks the currently connected adapter (single connection, v1), validates handshake messages using the wire protocol Zod schema (imported from `@agent-devtools/shared`), provides `isConnected()` / `getAdapterInfo()` methods, implements a `request(type, params)` method that sends a request to the adapter over WebSocket and returns a Promise that resolves with the response (or rejects on timeout per `REQUEST_TIMEOUT_MS`), handles adapter disconnect (clears state, logs), handles connection replacement (rejects in-flight requests, closes old connection with code `4001`), discards malformed incoming messages with a `warn` log. Write unit tests in `packages/server/tests/unit/connection-manager.test.ts` using a mock WebSocket.
+**Description**: Create `packages/server/src/ws/connection-manager.ts` with a `ConnectionManager` class implementing all behaviours defined by the tests. Write the minimal code to make all `connection-manager.test.ts` tests pass, then refactor while keeping tests green.
 
-**Depends on**: `types-config`, `types-wire-protocol`, `util-logger`
+**Depends on**: `ws-connection-manager-red`
 
-**Produces**: `packages/server/src/ws/connection-manager.ts`, `packages/server/tests/unit/connection-manager.test.ts`
+**Produces**: `packages/server/src/ws/connection-manager.ts`
 
-**Acceptance**: `bun run test tests/unit/connection-manager.test.ts` — all tests pass.
+**Acceptance**: `bun run test tests/unit/connection-manager.test.ts` — all tests pass. No previously passing tests broken.
 
 ---
 
@@ -808,87 +867,171 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 ### Phase 5 — MCP Tool Handlers
 
-#### Task `tool-health-check`
+#### Task `tool-health-check-red`
 
-**Title**: Implement `debug_health_check` tool.
+**Title**: Write failing tests for `debug_health_check` tool.
 
-**Description**: Create `packages/server/src/tools/health-check.ts` that exports a tool registration function. It queries `ConnectionManager` for connection status and adapter info, queries stream metadata, and returns the response shape from §3a. Register with `title`, `description`, `inputSchema`, `outputSchema`, and `annotations` per §3. Write unit tests in `packages/server/tests/unit/tools/health-check.test.ts` for connected and disconnected scenarios.
+**Description**: Write unit tests in `packages/server/tests/unit/tools/health-check.test.ts` that define the expected behaviour of the health check tool. Tests should cover: connected scenario (returns adapter info and stream metadata), disconnected scenario (returns appropriate status). Import from the not-yet-existing `../src/tools/health-check.ts`.
 
-**Depends on**: `ws-connection-manager`, `types-errors`
+**Depends on**: `scaffold-vitest`, `ws-connection-manager-green`, `types-errors-green`
 
-**Produces**: `packages/server/src/tools/health-check.ts`, `packages/server/tests/unit/tools/health-check.test.ts`
+**Produces**: `packages/server/tests/unit/tools/health-check.test.ts`
 
-**Acceptance**: `bun run test tests/unit/tools/health-check.test.ts` — all tests pass.
-
----
-
-#### Task `tool-list-streams`
-
-**Title**: Implement `debug_list_streams` tool.
-
-**Description**: Create `packages/server/src/tools/list-streams.ts` per §3b. Sends a request to the adapter via `ConnectionManager.request()` to get stream metadata. Returns error if not connected. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
-
-**Depends on**: `ws-connection-manager`, `types-errors`
-
-**Produces**: `packages/server/src/tools/list-streams.ts`, `packages/server/tests/unit/tools/list-streams.test.ts`
-
-**Acceptance**: Unit tests pass.
+**Acceptance**: `bun run test tests/unit/tools/health-check.test.ts` — tests **fail** because `health-check.ts` does not exist (import/module error), not because of test syntax errors.
 
 ---
 
-#### Task `tool-get-snapshot`
+#### Task `tool-health-check-green`
 
-**Title**: Implement `debug_get_snapshot` tool.
+**Title**: Implement `debug_health_check` tool to pass tests.
 
-**Description**: Create `packages/server/src/tools/get-snapshot.ts` per §3c. Accepts `stream` and optional `scope` parameters. Sends request to adapter, applies scope filtering using `resolveJsonPath` if provided. Handles all error cases. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
+**Description**: Create `packages/server/src/tools/health-check.ts` that exports a tool registration function. It queries `ConnectionManager` for connection status and adapter info, queries stream metadata, and returns the response shape from §3a. Register with `title`, `description`, `inputSchema`, `outputSchema`, and `annotations` per §3. Write the minimal code to make all tests pass, then refactor while keeping tests green.
 
-**Depends on**: `ws-connection-manager`, `types-errors`, `util-json-path`
+**Depends on**: `tool-health-check-red`
 
-**Produces**: `packages/server/src/tools/get-snapshot.ts`, `packages/server/tests/unit/tools/get-snapshot.test.ts`
+**Produces**: `packages/server/src/tools/health-check.ts`
 
-**Acceptance**: Unit tests pass.
-
----
-
-#### Task `tool-query-events`
-
-**Title**: Implement `debug_query_events` tool.
-
-**Description**: Create `packages/server/src/tools/query-events.ts` per §3d. Validates and clamps `limit` parameter. Sends request with filters to adapter. Returns paginated event list. Applies `MAX_RESPONSE_CHARS` truncation. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
-
-**Depends on**: `ws-connection-manager`, `types-errors`, `types-debug-event`
-
-**Produces**: `packages/server/src/tools/query-events.ts`, `packages/server/tests/unit/tools/query-events.test.ts`
-
-**Acceptance**: Unit tests pass.
+**Acceptance**: `bun run test tests/unit/tools/health-check.test.ts` — all tests pass. No previously passing tests broken.
 
 ---
 
-#### Task `tool-get-state-path`
+#### Task `tool-list-streams-red`
 
-**Title**: Implement `debug_get_state_path` tool.
+**Title**: Write failing tests for `debug_list_streams` tool.
 
-**Description**: Create `packages/server/src/tools/get-state-path.ts` per §3e. Accepts optional `stream` parameter (defaults to `'redux'`). Requests the latest state snapshot from the adapter for the target stream, resolves the dot-notation path using `resolveJsonPath`, returns the value. Handles `PATH_NOT_FOUND`. Register with `title`, `annotations`, and `outputSchema`. Write unit tests.
+**Description**: Write unit tests in `packages/server/tests/unit/tools/list-streams.test.ts` that define the expected behaviour of the list streams tool per §3b. Tests should cover: successful stream metadata retrieval via `ConnectionManager.request()`, and error response when adapter is not connected. Import from the not-yet-existing `../src/tools/list-streams.ts`.
 
-**Depends on**: `ws-connection-manager`, `types-errors`, `util-json-path`
+**Depends on**: `scaffold-vitest`, `ws-connection-manager-green`, `types-errors-green`
 
-**Produces**: `packages/server/src/tools/get-state-path.ts`, `packages/server/tests/unit/tools/get-state-path.test.ts`
+**Produces**: `packages/server/tests/unit/tools/list-streams.test.ts`
 
-**Acceptance**: Unit tests pass.
+**Acceptance**: `bun run test tests/unit/tools/list-streams.test.ts` — tests **fail** because `list-streams.ts` does not exist (import/module error), not because of test syntax errors.
 
 ---
 
-#### Task `tool-diff-snapshots`
+#### Task `tool-list-streams-green`
 
-**Title**: Implement `debug_diff_snapshots` tool.
+**Title**: Implement `debug_list_streams` tool to pass tests.
 
-**Description**: Create `packages/server/src/tools/diff-snapshots.ts` per §3f. Requests two snapshots by sequence number from the adapter, computes a structural diff (added/removed/changed keys), returns the diff. Implement the diff algorithm in the tool handler itself (simple recursive object comparison — no external diff library). Respect `max_depth` and `max_changes` parameters to bound computation. Register with `title`, `annotations`, and `outputSchema`. Write unit tests including depth-limit and truncation behavior.
+**Description**: Create `packages/server/src/tools/list-streams.ts` per §3b. Sends a request to the adapter via `ConnectionManager.request()` to get stream metadata. Returns error if not connected. Register with `title`, `annotations`, and `outputSchema`. Write the minimal code to make all tests pass, then refactor while keeping tests green.
 
-**Depends on**: `ws-connection-manager`, `types-errors`
+**Depends on**: `tool-list-streams-red`
 
-**Produces**: `packages/server/src/tools/diff-snapshots.ts`, `packages/server/tests/unit/tools/diff-snapshots.test.ts`
+**Produces**: `packages/server/src/tools/list-streams.ts`
 
-**Acceptance**: Unit tests pass.
+**Acceptance**: `bun run test tests/unit/tools/list-streams.test.ts` — all tests pass. No previously passing tests broken.
+
+---
+
+#### Task `tool-get-snapshot-red`
+
+**Title**: Write failing tests for `debug_get_snapshot` tool.
+
+**Description**: Write unit tests in `packages/server/tests/unit/tools/get-snapshot.test.ts` that define the expected behaviour of the get snapshot tool per §3c. Tests should cover: accepting `stream` and optional `scope` parameters, sending request to adapter, applying scope filtering using `resolveJsonPath` when provided, and handling all error cases. Import from the not-yet-existing `../src/tools/get-snapshot.ts`.
+
+**Depends on**: `scaffold-vitest`, `ws-connection-manager-green`, `types-errors-green`, `util-json-path-green`
+
+**Produces**: `packages/server/tests/unit/tools/get-snapshot.test.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/get-snapshot.test.ts` — tests **fail** because `get-snapshot.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `tool-get-snapshot-green`
+
+**Title**: Implement `debug_get_snapshot` tool to pass tests.
+
+**Description**: Create `packages/server/src/tools/get-snapshot.ts` per §3c. Accepts `stream` and optional `scope` parameters. Sends request to adapter, applies scope filtering using `resolveJsonPath` if provided. Handles all error cases. Register with `title`, `annotations`, and `outputSchema`. Write the minimal code to make all tests pass, then refactor while keeping tests green.
+
+**Depends on**: `tool-get-snapshot-red`
+
+**Produces**: `packages/server/src/tools/get-snapshot.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/get-snapshot.test.ts` — all tests pass. No previously passing tests broken.
+
+---
+
+#### Task `tool-query-events-red`
+
+**Title**: Write failing tests for `debug_query_events` tool.
+
+**Description**: Write unit tests in `packages/server/tests/unit/tools/query-events.test.ts` that define the expected behaviour of the query events tool per §3d. Tests should cover: validating and clamping the `limit` parameter, sending request with filters to adapter, returning paginated event list, and applying `MAX_RESPONSE_CHARS` truncation. Import from the not-yet-existing `../src/tools/query-events.ts`.
+
+**Depends on**: `scaffold-vitest`, `ws-connection-manager-green`, `types-errors-green`, `types-debug-event`
+
+**Produces**: `packages/server/tests/unit/tools/query-events.test.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/query-events.test.ts` — tests **fail** because `query-events.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `tool-query-events-green`
+
+**Title**: Implement `debug_query_events` tool to pass tests.
+
+**Description**: Create `packages/server/src/tools/query-events.ts` per §3d. Validates and clamps `limit` parameter. Sends request with filters to adapter. Returns paginated event list. Applies `MAX_RESPONSE_CHARS` truncation. Register with `title`, `annotations`, and `outputSchema`. Write the minimal code to make all tests pass, then refactor while keeping tests green.
+
+**Depends on**: `tool-query-events-red`
+
+**Produces**: `packages/server/src/tools/query-events.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/query-events.test.ts` — all tests pass. No previously passing tests broken.
+
+---
+
+#### Task `tool-get-state-path-red`
+
+**Title**: Write failing tests for `debug_get_state_path` tool.
+
+**Description**: Write unit tests in `packages/server/tests/unit/tools/get-state-path.test.ts` that define the expected behaviour of the get state path tool per §3e. Tests should cover: accepting optional `stream` parameter defaulting to `'redux'`, requesting latest state snapshot from adapter, resolving dot-notation path using `resolveJsonPath`, returning the value, and handling `PATH_NOT_FOUND`. Import from the not-yet-existing `../src/tools/get-state-path.ts`.
+
+**Depends on**: `scaffold-vitest`, `ws-connection-manager-green`, `types-errors-green`, `util-json-path-green`
+
+**Produces**: `packages/server/tests/unit/tools/get-state-path.test.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/get-state-path.test.ts` — tests **fail** because `get-state-path.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `tool-get-state-path-green`
+
+**Title**: Implement `debug_get_state_path` tool to pass tests.
+
+**Description**: Create `packages/server/src/tools/get-state-path.ts` per §3e. Accepts optional `stream` parameter (defaults to `'redux'`). Requests the latest state snapshot from the adapter for the target stream, resolves the dot-notation path using `resolveJsonPath`, returns the value. Handles `PATH_NOT_FOUND`. Register with `title`, `annotations`, and `outputSchema`. Write the minimal code to make all tests pass, then refactor while keeping tests green.
+
+**Depends on**: `tool-get-state-path-red`
+
+**Produces**: `packages/server/src/tools/get-state-path.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/get-state-path.test.ts` — all tests pass. No previously passing tests broken.
+
+---
+
+#### Task `tool-diff-snapshots-red`
+
+**Title**: Write failing tests for `debug_diff_snapshots` tool.
+
+**Description**: Write unit tests in `packages/server/tests/unit/tools/diff-snapshots.test.ts` that define the expected behaviour of the diff snapshots tool per §3f. Tests should cover: requesting two snapshots by sequence number from the adapter, computing a structural diff (added/removed/changed keys), returning the diff, `max_depth` limiting recursion depth, and `max_changes` truncation behaviour. Import from the not-yet-existing `../src/tools/diff-snapshots.ts`.
+
+**Depends on**: `scaffold-vitest`, `ws-connection-manager-green`, `types-errors-green`
+
+**Produces**: `packages/server/tests/unit/tools/diff-snapshots.test.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/diff-snapshots.test.ts` — tests **fail** because `diff-snapshots.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `tool-diff-snapshots-green`
+
+**Title**: Implement `debug_diff_snapshots` tool to pass tests.
+
+**Description**: Create `packages/server/src/tools/diff-snapshots.ts` per §3f. Requests two snapshots by sequence number from the adapter, computes a structural diff (added/removed/changed keys), returns the diff. Implement the diff algorithm in the tool handler itself (simple recursive object comparison — no external diff library). Respect `max_depth` and `max_changes` parameters to bound computation. Register with `title`, `annotations`, and `outputSchema`. Write the minimal code to make all tests pass, then refactor while keeping tests green.
+
+**Depends on**: `tool-diff-snapshots-red`
+
+**Produces**: `packages/server/src/tools/diff-snapshots.ts`
+
+**Acceptance**: `bun run test tests/unit/tools/diff-snapshots.test.ts` — all tests pass. No previously passing tests broken.
 
 ---
 
@@ -900,7 +1043,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Create `packages/server/src/resources/session.ts` that registers a static MCP resource at `debug://session/current`. When read, it queries `ConnectionManager` for adapter info and returns session metadata. Returns error if not connected.
 
-**Depends on**: `ws-connection-manager`, `types-errors`
+**Depends on**: `ws-connection-manager-green`, `types-errors-green`
 
 **Produces**: `packages/server/src/resources/session.ts`
 
@@ -914,7 +1057,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Create `packages/server/src/resources/redux-state.ts` that registers a static MCP resource at `debug://redux/state`. When read, requests the latest Redux state snapshot from the adapter and returns it as JSON text content. Applies `MAX_RESPONSE_CHARS` truncation.
 
-**Depends on**: `ws-connection-manager`, `types-errors`
+**Depends on**: `ws-connection-manager-green`, `types-errors-green`
 
 **Produces**: `packages/server/src/resources/redux-state.ts`
 
@@ -928,7 +1071,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Create `packages/server/src/resources/navigation-state.ts` that registers a static MCP resource at `debug://navigation/state` for the latest navigation state.
 
-**Depends on**: `ws-connection-manager`, `types-errors`
+**Depends on**: `ws-connection-manager-green`, `types-errors-green`
 
 **Produces**: `packages/server/src/resources/navigation-state.ts`
 
@@ -944,7 +1087,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Create `packages/server/src/server.ts` that exports a `createMcpServer(connectionManager, config)` function. It instantiates `McpServer` from `@modelcontextprotocol/sdk` using `server.registerTool()` (not deprecated `server.tool()`), registers all 6 tools (§3) with their Zod `inputSchema`, `outputSchema`, `title`, `description`, and `annotations`, and registers all 3 resources (§4). Returns the configured `McpServer` instance.
 
-**Depends on**: All `tool-*` tasks, all `resource-*` tasks.
+**Depends on**: All `tool-*-green` tasks, all `resource-*` tasks.
 
 **Produces**: `packages/server/src/server.ts`
 
@@ -958,7 +1101,7 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 **Description**: Update `packages/server/src/index.ts` to implement the full startup sequence (§9): load config (including non-loopback warning), create `ConnectionManager`, start WebSocket server (with security hardening), create MCP server, connect to `StdioServerTransport`, register shutdown handlers (`SIGINT`, `SIGTERM`). This is the runnable entry point.
 
-**Depends on**: `server-assembly`, `ws-server`, `types-config`, `util-logger`
+**Depends on**: `server-assembly`, `ws-server`, `types-config-green`, `util-logger`
 
 **Produces**: `packages/server/src/index.ts` (updated)
 
@@ -1060,41 +1203,50 @@ This section defines the fine-grained, dependency-ordered task breakdown for AI 
 
 ```text
 scaffold-init
-├── scaffold-vitest
-├── scaffold-src-dirs
-│   ├── types-config
-│   │   ├── util-logger
-│   │   └── ws-server ←────────────────────────────────────┐
-│   ├── types-errors                                        │
-│   │   ├── tool-health-check ←─── ws-connection-manager ──┤
-│   │   ├── tool-list-streams ←─── ws-connection-manager    │
-│   │   ├── tool-get-snapshot ←─── ws-connection-manager    │
-│   │   │                    ←─── util-json-path            │
-│   │   ├── tool-query-events ←── ws-connection-manager     │
-│   │   ├── tool-get-state-path ← ws-connection-manager     │
-│   │   │                    ←─── util-json-path            │
-│   │   ├── tool-diff-snapshots ← ws-connection-manager     │
-│   │   ├── resource-session ←─── ws-connection-manager     │
-│   │   ├── resource-redux-state ← ws-connection-manager    │
-│   │   └── resource-navigation-state ← ws-connection-manager
-│   ├── types-debug-event                                   │
-│   │   ├── types-wire-protocol                             │
-│   │   │   ├── ws-connection-manager ──────────────────────┘
-│   │   │   └── test-mock-adapter
-│   │   └── test-fixtures
-│   └── util-json-path
-│
-│  Assembly (after all tools + resources):
-├── server-assembly → entry-point
-│
-│  Integration (after entry-point + test helpers):
-├── integration-ws-connection
-├── integration-tool-roundtrip
-└── integration-resource-roundtrip
-│
-│  Polish (after entry-point):
-├── readme
-└── package-bin
+├── scaffold-vitest ─────────────────────────────────────────────────────┐
+├── scaffold-src-dirs                                                    │
+│   ├── types-config-red ←── scaffold-vitest                             │
+│   │   └── types-config-green                                           │
+│   │       ├── util-logger                                              │
+│   │       └── ws-server ←─────────────────────────────────────────────┐│
+│   ├── types-errors-red ←── scaffold-vitest                            ││
+│   │   └── types-errors-green                                          ││
+│   ├── types-debug-event                                               ││
+│   │   ├── types-wire-protocol                                         ││
+│   │   │   ├── ws-connection-manager-red ←── scaffold-vitest,          ││
+│   │   │   │                                  types-config-green,      ││
+│   │   │   │                                  util-logger              ││
+│   │   │   │   └── ws-connection-manager-green ────────────────────────┘│
+│   │   │   └── test-mock-adapter                                        │
+│   │   └── test-fixtures                                                │
+│   └── util-json-path-red ←── scaffold-vitest                           │
+│       └── util-json-path-green                                         │
+│                                                                        │
+│  Tool Red/Green pairs (each -red depends on scaffold-vitest +          │
+│  relevant -green dependencies; each -green depends on its -red):       │
+│   ├── tool-health-check-red → tool-health-check-green                  │
+│   ├── tool-list-streams-red → tool-list-streams-green                  │
+│   ├── tool-get-snapshot-red → tool-get-snapshot-green                   │
+│   ├── tool-query-events-red → tool-query-events-green                  │
+│   ├── tool-get-state-path-red → tool-get-state-path-green              │
+│   └── tool-diff-snapshots-red → tool-diff-snapshots-green              │
+│                                                                        │
+│  Resources (depend on ws-connection-manager-green, types-errors-green): │
+│   ├── resource-session                                                 │
+│   ├── resource-redux-state                                             │
+│   └── resource-navigation-state                                        │
+│                                                                        │
+│  Assembly (after all tool-*-green + resources):                        │
+├── server-assembly → entry-point                                        │
+│                                                                        │
+│  Integration (after entry-point + test helpers):                       │
+├── integration-ws-connection                                            │
+├── integration-tool-roundtrip                                           │
+└── integration-resource-roundtrip                                       │
+│                                                                        │
+│  Polish (after entry-point):                                           │
+├── readme                                                               │
+└── package-bin                                                          │
 ```
 
 ---

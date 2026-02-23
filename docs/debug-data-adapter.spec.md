@@ -736,6 +736,20 @@ packages/shared/
 
 Fine-grained, dependency-ordered tasks. Each task specifies files produced, dependencies, and acceptance criteria.
 
+All tasks that produce both implementation code and tests follow a **strict Test-Driven Development (TDD)** workflow. These tasks are split into two sub-tasks:
+
+- **Red (`-red`)**: Write the test first. The test defines the expected public interface and observable behaviour. The acceptance criterion is that the test **fails** because the implementation does not exist yet — not because of syntax or configuration errors.
+- **Green (`-green`)**: Write the minimal implementation code to make the failing test pass, then refactor while keeping tests green. The acceptance criterion is that **all** tests pass and no previously passing tests are broken.
+
+Tasks are always executed as **vertical slices**: one Red → one Green → repeat. Never batch all Red tasks before starting Green tasks.
+
+### Legend
+
+- **ID**: Unique task identifier (used for dependency tracking). Suffixed with `-red` or `-green` for TDD sub-tasks.
+- **Depends on**: Task IDs that must be completed first.
+- **Produces**: Files created or modified.
+- **Acceptance**: How to verify the task is done. For `-red` tasks, this is a test failure for the right reason. For `-green` tasks, this is all tests passing.
+
 ---
 
 ### Phase 1 — Monorepo and Shared Package Scaffolding
@@ -798,121 +812,233 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 ---
 
-#### Task `shared-debug-event`
+#### Task `shared-debug-event-red`
 
-**Title**: Implement DebugEvent envelope schema.
+**Title**: Write failing tests for DebugEvent envelope schema.
 
-**Description**: Implement `packages/shared/src/debug-event.ts` with the `DebugEvent` TypeScript interface and a `DebugEventSchema` Zod object (per §6). The Zod schema should validate `stream`, `event`, `timestamp`, `seq`, `sessionId`, `payload`, and `meta` fields. Write unit tests in `packages/shared/tests/debug-event.test.ts` verifying valid events pass and invalid events are rejected.
+**Description**: Write unit tests in `packages/shared/tests/debug-event.test.ts` that define the expected behaviour of the `DebugEvent` interface and `DebugEventSchema` Zod object (per §6). Tests should verify: valid events with correct `stream`, `event`, `timestamp`, `seq`, `sessionId`, `payload`, and `meta` fields pass validation, and invalid events (missing fields, wrong types, invalid stream names) are rejected. Import from the not-yet-existing implementation in `../src/debug-event.ts`.
 
-**Depends on**: `shared-streams`
+**Depends on**: `shared-scaffold`, `shared-streams`
 
-**Produces**: `packages/shared/src/debug-event.ts` (implemented), `packages/shared/tests/debug-event.test.ts`
+**Produces**: `packages/shared/tests/debug-event.test.ts`
 
-**Acceptance**: `bun run test --filter @agent-devtools/shared` — tests pass.
+**Acceptance**: `bun run test --filter @agent-devtools/shared` — tests **fail** because the implementation does not exist (import/module error), not because of test syntax errors.
 
 ---
 
-#### Task `shared-wire-protocol`
+#### Task `shared-debug-event-green`
 
-**Title**: Define wire protocol message types.
+**Title**: Implement DebugEvent envelope schema to pass tests.
 
-**Description**: Implement `packages/shared/src/wire-protocol.ts` with TypeScript interfaces and Zod schemas for all wire protocol messages: `HandshakeMessage` (adapter → server), `HandshakeAckMessage` (server → adapter), `RequestMessage` (server → adapter), `ResponseMessage` (adapter → server), `PushEventMessage` (adapter → server), `ErrorMessage` (bidirectional). Each message has a `type` discriminator field. Include a `WireMessageSchema` discriminated union for parsing any incoming message. Write unit tests.
+**Description**: Implement `packages/shared/src/debug-event.ts` with the `DebugEvent` TypeScript interface and `DebugEventSchema` Zod object. Write the minimal code to make all `debug-event.test.ts` tests pass, then refactor while keeping tests green.
 
-**Depends on**: `shared-debug-event`
+**Depends on**: `shared-debug-event-red`
 
-**Produces**: `packages/shared/src/wire-protocol.ts` (implemented), `packages/shared/tests/wire-protocol.test.ts`
+**Produces**: `packages/shared/src/debug-event.ts` (implemented)
 
-**Acceptance**: Tests pass. Both adapter and server can import these types.
+**Acceptance**: `bun run test --filter @agent-devtools/shared` — all tests pass. No previously passing tests broken.
+
+---
+
+#### Task `shared-wire-protocol-red`
+
+**Title**: Write failing tests for wire protocol message types.
+
+**Description**: Write unit tests in `packages/shared/tests/wire-protocol.test.ts` that define the expected behaviour of the wire protocol types and Zod schemas. Tests should verify: each message type (`HandshakeMessage`, `HandshakeAckMessage`, `RequestMessage`, `ResponseMessage`, `PushEventMessage`, `ErrorMessage`) validates correctly, the `WireMessageSchema` discriminated union parses any valid incoming message, and invalid messages are rejected. Import from the not-yet-existing implementation in `../src/wire-protocol.ts`.
+
+**Depends on**: `shared-scaffold`, `shared-debug-event-green`
+
+**Produces**: `packages/shared/tests/wire-protocol.test.ts`
+
+**Acceptance**: `bun run test --filter @agent-devtools/shared` — tests **fail** because the implementation does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `shared-wire-protocol-green`
+
+**Title**: Implement wire protocol message types to pass tests.
+
+**Description**: Implement `packages/shared/src/wire-protocol.ts` with TypeScript interfaces and Zod schemas for all wire protocol messages. Each message has a `type` discriminator field. Include a `WireMessageSchema` discriminated union for parsing any incoming message. Write the minimal code to make all `wire-protocol.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `shared-wire-protocol-red`
+
+**Produces**: `packages/shared/src/wire-protocol.ts` (implemented)
+
+**Acceptance**: Tests pass. Both adapter and server can import these types. No previously passing tests broken.
 
 ---
 
 ### Phase 3 — Adapter Utilities
 
-#### Task `util-sizeof`
+#### Task `util-sizeof-red`
 
-**Title**: Implement fast JSON size estimation.
+**Title**: Write failing tests for fast JSON size estimation.
 
-**Description**: Create `packages/adapter/src/utils/sizeof.ts` with a `sizeof(value)` function that estimates the UTF-8 byte length of a JSON-serialized value without performing full serialization. Uses a recursive traversal with early termination when a threshold is exceeded. In React Native, uses `TextEncoder` for accurate multi-byte character measurement on string leaves. Write unit tests in `packages/adapter/tests/unit/sizeof.test.ts`.
-
-**Depends on**: `adapter-scaffold`
-
-**Produces**: `packages/adapter/src/utils/sizeof.ts`, `packages/adapter/tests/unit/sizeof.test.ts`
-
-**Acceptance**: Unit tests pass. Estimates are within ±10% of `Buffer.byteLength(JSON.stringify(value), 'utf8')` for test payloads.
-
----
-
-#### Task `util-truncate`
-
-**Title**: Implement payload truncation.
-
-**Description**: Create `packages/adapter/src/utils/truncate.ts` with a `truncatePayload(payload, maxSize)` function that: measures the payload size (using `sizeof`), returns it unchanged if within limit, or progressively removes the largest top-level properties (replacing with `"[truncated]"`) and trims arrays from the end (appending `"[... N more items]"` sentinel) until the payload fits. Returns `{ payload, truncated: boolean, originalSize: number }`. Write unit tests covering objects, arrays, nested structures, and edge cases (single large string value).
-
-**Depends on**: `util-sizeof`
-
-**Produces**: `packages/adapter/src/utils/truncate.ts`, `packages/adapter/tests/unit/truncate.test.ts`
-
-**Acceptance**: Unit tests pass. Truncated payloads are always within the size limit.
-
----
-
-#### Task `util-uuid`
-
-**Title**: Implement minimal UUIDv4 generator.
-
-**Description**: Create `packages/adapter/src/utils/uuid.ts` with a `uuid()` function that generates a UUIDv4 string using `crypto.getRandomValues` (available in React Native's JSC and Hermes engines). Do NOT use `Math.random` — it lacks sufficient entropy for session identifiers. If `crypto.getRandomValues` is unavailable (should not happen in RN), throw an error at init rather than silently degrading. Write a basic unit test.
+**Description**: Write unit tests in `packages/adapter/tests/unit/sizeof.test.ts` that define the expected behaviour of `sizeof(value)`. Tests should cover: primitive values (strings, numbers, booleans, null), objects, arrays, nested structures, multi-byte characters, and verify estimates are within ±10% of `Buffer.byteLength(JSON.stringify(value), 'utf8')` for test payloads. Import from the not-yet-existing `../../src/utils/sizeof.ts`.
 
 **Depends on**: `adapter-scaffold`
 
-**Produces**: `packages/adapter/src/utils/uuid.ts`, `packages/adapter/tests/unit/uuid.test.ts`
+**Produces**: `packages/adapter/tests/unit/sizeof.test.ts`
 
-**Acceptance**: Unit test passes. Generated strings match UUIDv4 format.
+**Acceptance**: `bun run test packages/adapter/tests/unit/sizeof.test.ts` — tests **fail** because `sizeof.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `util-sizeof-green`
+
+**Title**: Implement fast JSON size estimation to pass tests.
+
+**Description**: Create `packages/adapter/src/utils/sizeof.ts` with a `sizeof(value)` function that estimates the UTF-8 byte length of a JSON-serialized value without performing full serialization. Uses a recursive traversal with early termination when a threshold is exceeded. In React Native, uses `TextEncoder` for accurate multi-byte character measurement on string leaves. Write the minimal code to make all `sizeof.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `util-sizeof-red`
+
+**Produces**: `packages/adapter/src/utils/sizeof.ts`
+
+**Acceptance**: Unit tests pass. Estimates are within ±10% of `Buffer.byteLength(JSON.stringify(value), 'utf8')` for test payloads. No previously passing tests broken.
+
+---
+
+#### Task `util-truncate-red`
+
+**Title**: Write failing tests for payload truncation.
+
+**Description**: Write unit tests in `packages/adapter/tests/unit/truncate.test.ts` that define the expected behaviour of `truncatePayload(payload, maxSize)`. Tests should cover: payloads within limit returned unchanged, objects with large properties progressively truncated (replaced with `"[truncated]"`), arrays trimmed from the end (appending `"[... N more items]"` sentinel), nested structures, edge cases (single large string value), and verify the return shape `{ payload, truncated: boolean, originalSize: number }`. Import from the not-yet-existing `../../src/utils/truncate.ts`.
+
+**Depends on**: `adapter-scaffold`, `util-sizeof-green`
+
+**Produces**: `packages/adapter/tests/unit/truncate.test.ts`
+
+**Acceptance**: `bun run test packages/adapter/tests/unit/truncate.test.ts` — tests **fail** because `truncate.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `util-truncate-green`
+
+**Title**: Implement payload truncation to pass tests.
+
+**Description**: Create `packages/adapter/src/utils/truncate.ts` with a `truncatePayload(payload, maxSize)` function that measures payload size (using `sizeof`), returns it unchanged if within limit, or progressively removes the largest top-level properties and trims arrays until the payload fits. Write the minimal code to make all `truncate.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `util-truncate-red`
+
+**Produces**: `packages/adapter/src/utils/truncate.ts`
+
+**Acceptance**: Unit tests pass. Truncated payloads are always within the size limit. No previously passing tests broken.
+
+---
+
+#### Task `util-uuid-red`
+
+**Title**: Write failing tests for minimal UUIDv4 generator.
+
+**Description**: Write unit tests in `packages/adapter/tests/unit/uuid.test.ts` that define the expected behaviour of `uuid()`. Tests should verify: generated strings match UUIDv4 format (`/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i`), multiple calls produce unique values. Import from the not-yet-existing `../../src/utils/uuid.ts`.
+
+**Depends on**: `adapter-scaffold`
+
+**Produces**: `packages/adapter/tests/unit/uuid.test.ts`
+
+**Acceptance**: `bun run test packages/adapter/tests/unit/uuid.test.ts` — tests **fail** because `uuid.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `util-uuid-green`
+
+**Title**: Implement minimal UUIDv4 generator to pass tests.
+
+**Description**: Create `packages/adapter/src/utils/uuid.ts` with a `uuid()` function that generates a UUIDv4 string using `crypto.getRandomValues` (available in React Native's JSC and Hermes engines). Do NOT use `Math.random`. If `crypto.getRandomValues` is unavailable, throw an error at init rather than silently degrading. Write the minimal code to make all `uuid.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `util-uuid-red`
+
+**Produces**: `packages/adapter/src/utils/uuid.ts`
+
+**Acceptance**: Unit test passes. Generated strings match UUIDv4 format. No previously passing tests broken.
 
 ---
 
 ### Phase 4 — Ring Buffer
 
-#### Task `ring-buffer`
+#### Task `ring-buffer-red`
 
-**Title**: Implement the ring buffer with snapshot slot.
+**Title**: Write failing tests for ring buffer with snapshot slot.
 
-**Description**: Create `packages/adapter/src/buffer/ring-buffer.ts` implementing the `RingBuffer<T>` interface from §8. Backed by a fixed-size array with head/tail pointers. Include the snapshot slot (§8, "Snapshot slot") as a separate single-value store. Write comprehensive unit tests covering: push and eviction, seq monotonicity, query with `sinceSeq` / `limit` / `filter`, `latest()`, `stats()`, `clear()`, snapshot slot overwrite.
+**Description**: Write comprehensive unit tests in `packages/adapter/tests/unit/ring-buffer.test.ts` that define the expected behaviour of the `RingBuffer<T>` interface from §8. Tests should cover: push and eviction, seq monotonicity, query with `sinceSeq` / `limit` / `filter`, `latest()`, `stats()`, `clear()`, snapshot slot overwrite, and edge cases (empty buffer, full buffer, wrap-around). Import from the not-yet-existing `../../src/buffer/ring-buffer.ts`.
 
 **Depends on**: `adapter-scaffold`
 
-**Produces**: `packages/adapter/src/buffer/ring-buffer.ts`, `packages/adapter/tests/unit/ring-buffer.test.ts`
+**Produces**: `packages/adapter/tests/unit/ring-buffer.test.ts`
 
-**Acceptance**: All unit tests pass. Ring buffer handles edge cases (empty buffer, full buffer, wrap-around).
+**Acceptance**: `bun run test packages/adapter/tests/unit/ring-buffer.test.ts` — tests **fail** because `ring-buffer.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `ring-buffer-green`
+
+**Title**: Implement ring buffer with snapshot slot to pass tests.
+
+**Description**: Create `packages/adapter/src/buffer/ring-buffer.ts` implementing the `RingBuffer<T>` interface from §8. Backed by a fixed-size array with head/tail pointers. Include the snapshot slot (§8, "Snapshot slot") as a separate single-value store. Write the minimal code to make all `ring-buffer.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `ring-buffer-red`
+
+**Produces**: `packages/adapter/src/buffer/ring-buffer.ts`
+
+**Acceptance**: All unit tests pass. Ring buffer handles edge cases (empty buffer, full buffer, wrap-around). No previously passing tests broken.
 
 ---
 
 ### Phase 5 — Collectors
 
-#### Task `collector-redux`
+#### Task `collector-redux-red`
 
-**Title**: Implement Redux collector.
+**Title**: Write failing tests for Redux collector.
 
-**Description**: Create `packages/adapter/src/collectors/redux.ts` per §7a. Export `createReduxCollector(emit)` that returns `{ middleware, captureSnapshot, destroy }`. The middleware emits `action_dispatched` events. `captureSnapshot` emits `state_snapshot`. State diff detection compares top-level keys after each action and emits `state_diff` for changed slices. The `emit` callback receives raw event data; the adapter core normalizes it into a `DebugEvent` envelope. Write unit tests using `mock-store`.
+**Description**: Write unit tests in `packages/adapter/tests/unit/collectors/redux.test.ts` using `mock-store` that define the expected behaviour of the Redux collector per §7a. Tests should cover: `createReduxCollector(emit)` returns `{ middleware, captureSnapshot, destroy }`, middleware emits `action_dispatched` events on dispatch, `captureSnapshot` emits `state_snapshot`, state diff detection compares top-level keys and emits `state_diff` for changed slices. Import from the not-yet-existing `../../../src/collectors/redux.ts`.
 
-**Depends on**: `ring-buffer`, `util-truncate`, `shared-debug-event`
+**Depends on**: `adapter-scaffold`, `ring-buffer-green`, `util-truncate-green`, `shared-debug-event-green`, `test-mock-store`
 
-**Produces**: `packages/adapter/src/collectors/redux.ts`, `packages/adapter/tests/unit/collectors/redux.test.ts`
+**Produces**: `packages/adapter/tests/unit/collectors/redux.test.ts`
 
-**Acceptance**: Unit tests pass. Middleware correctly emits events for dispatched actions.
+**Acceptance**: `bun run test packages/adapter/tests/unit/collectors/redux.test.ts` — tests **fail** because `redux.ts` collector does not exist (import/module error), not because of test syntax errors.
 
 ---
 
-#### Task `collector-navigation`
+#### Task `collector-redux-green`
 
-**Title**: Implement Navigation collector.
+**Title**: Implement Redux collector to pass tests.
 
-**Description**: Create `packages/adapter/src/collectors/navigation.ts` per §7b. Export `createNavigationCollector(navigationRef, emit)` that returns `{ captureSnapshot, destroy }`. Subscribes via `addListener('state', ...)`. Handles deferred subscription when ref is not ready. Write unit tests using `mock-navigation-ref`.
+**Description**: Create `packages/adapter/src/collectors/redux.ts` per §7a. Export `createReduxCollector(emit)` that returns `{ middleware, captureSnapshot, destroy }`. The `emit` callback receives raw event data; the adapter core normalizes it into a `DebugEvent` envelope. Write the minimal code to make all tests pass, then refactor while keeping tests green.
 
-**Depends on**: `ring-buffer`, `util-truncate`, `shared-debug-event`
+**Depends on**: `collector-redux-red`
 
-**Produces**: `packages/adapter/src/collectors/navigation.ts`, `packages/adapter/tests/unit/collectors/navigation.test.ts`
+**Produces**: `packages/adapter/src/collectors/redux.ts`
 
-**Acceptance**: Unit tests pass. Collector emits `route_change` on state changes.
+**Acceptance**: Unit tests pass. Middleware correctly emits events for dispatched actions. No previously passing tests broken.
+
+---
+
+#### Task `collector-navigation-red`
+
+**Title**: Write failing tests for Navigation collector.
+
+**Description**: Write unit tests in `packages/adapter/tests/unit/collectors/navigation.test.ts` using `mock-navigation-ref` that define the expected behaviour of the Navigation collector per §7b. Tests should cover: `createNavigationCollector(navigationRef, emit)` returns `{ captureSnapshot, destroy }`, subscribes via `addListener('state', ...)`, emits `route_change` on state changes, handles deferred subscription when ref is not ready, and cleanup on `destroy`. Import from the not-yet-existing `../../../src/collectors/navigation.ts`.
+
+**Depends on**: `adapter-scaffold`, `ring-buffer-green`, `util-truncate-green`, `shared-debug-event-green`, `test-mock-navigation-ref`
+
+**Produces**: `packages/adapter/tests/unit/collectors/navigation.test.ts`
+
+**Acceptance**: `bun run test packages/adapter/tests/unit/collectors/navigation.test.ts` — tests **fail** because `navigation.ts` collector does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `collector-navigation-green`
+
+**Title**: Implement Navigation collector to pass tests.
+
+**Description**: Create `packages/adapter/src/collectors/navigation.ts` per §7b. Export `createNavigationCollector(navigationRef, emit)` that returns `{ captureSnapshot, destroy }`. Subscribes via `addListener('state', ...)`. Handles deferred subscription when ref is not ready. Write the minimal code to make all tests pass, then refactor while keeping tests green.
+
+**Depends on**: `collector-navigation-red`
+
+**Produces**: `packages/adapter/src/collectors/navigation.ts`
+
+**Acceptance**: Unit tests pass. Collector emits `route_change` on state changes. No previously passing tests broken.
 
 ---
 
@@ -966,7 +1092,7 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 **Description**: Create `packages/adapter/tests/helpers/mock-ws-server.ts` — a `ws.WebSocketServer` that simulates the MCP server. Validates handshake, can send requests, captures push events, and provides assertion helpers.
 
-**Depends on**: `shared-wire-protocol`
+**Depends on**: `shared-wire-protocol-green`
 
 **Produces**: `packages/adapter/tests/helpers/mock-ws-server.ts`
 
@@ -976,33 +1102,61 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 ### Phase 7 — WebSocket Transport Client
 
-#### Task `transport-ws-client`
+#### Task `transport-ws-client-red`
 
-**Title**: Implement WebSocket transport client.
+**Title**: Write failing tests for WebSocket transport client.
 
-**Description**: Create `packages/adapter/src/transport/ws-client.ts` per §9. Export `createWsClient(config, handlers)` that returns `{ connect, disconnect, send, isConnected }`. Implements: server URL validation (`^wss?://`), connection to `config.serverUrl` with `config.connectTimeout`, handshake on open, reconnection with exponential backoff, request routing to handler callbacks, push event forwarding, message size enforcement, keepalive (ping every 30s, pong timeout 10s), incoming message validation against wire protocol Zod schemas. If `WebSocket` global is unavailable, logs a warning and returns a no-op client (all methods return immediately, `isConnected` always false). Write unit tests using `mock-ws-server`.
+**Description**: Write unit tests in `packages/adapter/tests/unit/transport/ws-client.test.ts` using `mock-ws-server` that define the expected behaviour of the WebSocket transport client per §9. Tests should cover: server URL validation (`^wss?://`), connection with timeout, handshake on open, reconnection with exponential backoff, request routing to handler callbacks, push event forwarding, message size enforcement, keepalive (ping/pong), incoming message validation against wire protocol Zod schemas, and no-op client when `WebSocket` global is unavailable. Import from the not-yet-existing `../../../src/transport/ws-client.ts`.
 
-**Depends on**: `shared-wire-protocol`, `util-truncate`, `test-mock-ws-server`
+**Depends on**: `adapter-scaffold`, `shared-wire-protocol-green`, `util-truncate-green`, `test-mock-ws-server`
 
-**Produces**: `packages/adapter/src/transport/ws-client.ts`, `packages/adapter/tests/unit/transport/ws-client.test.ts`
+**Produces**: `packages/adapter/tests/unit/transport/ws-client.test.ts`
 
-**Acceptance**: Unit tests pass. Client connects, reconnects, routes requests, validates incoming messages, keepalive works.
+**Acceptance**: `bun run test packages/adapter/tests/unit/transport/ws-client.test.ts` — tests **fail** because `ws-client.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `transport-ws-client-green`
+
+**Title**: Implement WebSocket transport client to pass tests.
+
+**Description**: Create `packages/adapter/src/transport/ws-client.ts` per §9. Export `createWsClient(config, handlers)` that returns `{ connect, disconnect, send, isConnected }`. Write the minimal code to make all `ws-client.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `transport-ws-client-red`
+
+**Produces**: `packages/adapter/src/transport/ws-client.ts`
+
+**Acceptance**: Unit tests pass. Client connects, reconnects, routes requests, validates incoming messages, keepalive works. No previously passing tests broken.
 
 ---
 
 ### Phase 8 — Adapter Core and Public API
 
-#### Task `adapter-core`
+#### Task `adapter-core-red`
 
-**Title**: Implement adapter core.
+**Title**: Write failing tests for adapter core.
 
-**Description**: Create `packages/adapter/src/adapter.ts` per §4a and §11. Implements: session ID generation, `__DEV__` gating, configuration validation (Zod), collector initialization for provided data sources, ring buffer creation per stream, event normalization (raw collector events → `DebugEvent` envelopes), WebSocket transport initialization, request handling (routes MCP server requests to ring buffer queries). Wire up the snapshot slot updates. Write unit tests for adapter lifecycle (init, destroy, double-init, no-op in production).
+**Description**: Write unit tests in `packages/adapter/tests/unit/adapter.test.ts` that define the expected behaviour of the adapter core per §4a and §11. Tests should cover: session ID generation, `__DEV__` gating (no-op in production), configuration validation, collector initialization for provided data sources, event normalization (raw collector events → `DebugEvent` envelopes), request handling, adapter lifecycle (init, destroy, double-init). Import from the not-yet-existing `../../src/adapter.ts`.
 
-**Depends on**: `collector-redux`, `collector-navigation`, `collector-mmkv-stub`, `ring-buffer`, `transport-ws-client`, `util-uuid`, `shared-debug-event`
+**Depends on**: `adapter-scaffold`, `collector-redux-green`, `collector-navigation-green`, `collector-mmkv-stub`, `ring-buffer-green`, `transport-ws-client-green`, `util-uuid-green`, `shared-debug-event-green`
 
-**Produces**: `packages/adapter/src/adapter.ts`, `packages/adapter/tests/unit/adapter.test.ts`
+**Produces**: `packages/adapter/tests/unit/adapter.test.ts`
 
-**Acceptance**: Unit tests pass. Adapter initializes with mock store, emits events, responds to requests.
+**Acceptance**: `bun run test packages/adapter/tests/unit/adapter.test.ts` — tests **fail** because `adapter.ts` does not exist (import/module error), not because of test syntax errors.
+
+---
+
+#### Task `adapter-core-green`
+
+**Title**: Implement adapter core to pass tests.
+
+**Description**: Create `packages/adapter/src/adapter.ts` per §4a and §11. Implements: session ID generation, `__DEV__` gating, configuration validation (Zod), collector initialization, ring buffer creation per stream, event normalization, WebSocket transport initialization, request handling, and snapshot slot updates. Write the minimal code to make all `adapter.test.ts` tests pass, then refactor while keeping tests green.
+
+**Depends on**: `adapter-core-red`
+
+**Produces**: `packages/adapter/src/adapter.ts`
+
+**Acceptance**: Unit tests pass. Adapter initializes with mock store, emits events, responds to requests. No previously passing tests broken.
 
 ---
 
@@ -1012,7 +1166,7 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 
 **Description**: Update `packages/adapter/src/index.ts` to export the real implementations: `initDebugAdapter()` (wraps adapter core), `useDebugAdapter()` (React hook that calls init/destroy), `createDebugMiddleware()` (standalone middleware export). Implement `src/types.ts` with all public TypeScript types (`AdapterConfig`, `DebugAdapterHandle`, `ReduxStore`, `NavigationContainerRef` — as minimal interface types, not importing from `@react-navigation/*`). Ensure all exports are no-ops when `__DEV__` is `false`.
 
-**Depends on**: `adapter-core`
+**Depends on**: `adapter-core-green`
 
 **Produces**: `packages/adapter/src/index.ts` (updated), `packages/adapter/src/types.ts`
 
@@ -1066,32 +1220,39 @@ Fine-grained, dependency-ordered tasks. Each task specifies files produced, depe
 monorepo-init
 ├── shared-scaffold
 │   └── shared-streams
-│       └── shared-debug-event
-│           └── shared-wire-protocol
-│               ├── test-mock-ws-server
-│               │   └── transport-ws-client
-│               └── (used by adapter-core)
+│       └── shared-debug-event-red
+│           └── shared-debug-event-green
+│               └── shared-wire-protocol-red
+│                   └── shared-wire-protocol-green
+│                       ├── test-mock-ws-server
+│                       │   └── transport-ws-client-red → transport-ws-client-green
+│                       └── (used by adapter-core-red)
 │
 ├── adapter-scaffold
-│   ├── util-sizeof
-│   │   └── util-truncate
-│   │       ├── collector-redux
-│   │       ├── collector-navigation
-│   │       └── transport-ws-client
-│   ├── util-uuid
-│   │   └── adapter-core
-│   ├── ring-buffer
-│   │   ├── collector-redux
-│   │   └── collector-navigation
+│   ├── util-sizeof-red
+│   │   └── util-sizeof-green
+│   │       └── util-truncate-red
+│   │           └── util-truncate-green
+│   │               ├── collector-redux-red → collector-redux-green
+│   │               ├── collector-navigation-red → collector-navigation-green
+│   │               └── transport-ws-client-red (also depends on shared-wire-protocol-green)
+│   ├── util-uuid-red
+│   │   └── util-uuid-green
+│   │       └── adapter-core-red
+│   ├── ring-buffer-red
+│   │   └── ring-buffer-green
+│   │       ├── collector-redux-red
+│   │       └── collector-navigation-red
 │   ├── collector-mmkv-stub
-│   │   └── adapter-core
+│   │   └── adapter-core-red
 │   ├── test-mock-store
+│   │   ├── collector-redux-red
 │   │   └── integration-adapter-to-server
 │   └── test-mock-navigation-ref
-│       └── collector-navigation (tests)
+│       └── collector-navigation-red
 │
-│  Assembly (after collectors + transport):
-├── adapter-core
+│  Assembly (after all collector-*-green + transport-*-green):
+├── adapter-core-red → adapter-core-green
 │   └── adapter-public-api
 │       ├── integration-adapter-to-server
 │       └── adapter-readme
