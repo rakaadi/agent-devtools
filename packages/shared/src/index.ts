@@ -1,2 +1,2 @@
-// Shared types and schemas — not yet implemented
-export {}
+export * from './debug-event.js'
+export * from './wire-protocol.js'
