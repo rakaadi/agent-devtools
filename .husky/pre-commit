@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+# Pre-commit hook: Run ESLint on staged files and all tests
+# To bypass all checks for an emergency commit, use: git commit --no-verify
+
+# Run ESLint on staged files
+echo "🔧 Running ESLint on staged files..."
+bunx lint-staged
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ COMMIT REJECTED: ESLint found errors that could not be auto-fixed"
+  echo ""
+  echo "Please fix the errors above and try again."
+  echo ""
+  exit 1
+fi
+
+echo "✅ ESLint passed"
+echo ""
+
+# Run full test suite across all packages
+echo "🧪 Running tests..."
+bun run test
+
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "❌ COMMIT REJECTED: One or more tests failed"
+  echo ""
+  echo "Please fix the failing tests above and try again."
+  echo ""
+  exit 1
+fi
+
+echo "✅ All tests passed"
+echo ""
+echo "✅ All checks passed"
