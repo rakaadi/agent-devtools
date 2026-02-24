@@ -1,6 +1,6 @@
 {
   "name": "@agent-devtools/adapter",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "In-app debug data adapter for React Native — collects Redux, Navigation, and MMKV state for AI agent consumption",
   "type": "module",
   "main": "./src/index.ts",

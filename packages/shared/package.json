@@ -1,6 +1,6 @@
 {
   "name": "@agent-devtools/shared",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "Shared types and schemas for agent-devtools (wire protocol, DebugEvent envelope)",
   "type": "module",
   "main": "./src/index.ts",

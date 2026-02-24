@@ -1,6 +1,6 @@
 {
   "name": "@agent-devtools/server",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "description": "MCP server exposing React Native app debug data to AI agents",
   "type": "module",
   "main": "./src/index.ts",
