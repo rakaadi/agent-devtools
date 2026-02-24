@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { DebugEventSchema, STREAM_NAMES, type DebugEvent, type StreamName } from './debug-event.js'
+import { DebugEventSchema, type DebugEvent } from './debug-event.js'
+import { STREAM_NAMES, type StreamName } from './streams.js'
 
 export interface HandshakeMessage {
   type: 'handshake'
