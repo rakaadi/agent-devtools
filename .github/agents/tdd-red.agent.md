@@ -13,6 +13,7 @@ tools:
 # Hidden from the agents dropdown — this agent is only meant to be invoked
 # as a subagent by the TDD Orchestrator. Users should start from there.
 user-invokable: false
+model: GPT-5.3-Codex (copilot)
 ---
 
 # TDD Red Agent — Phase 1
