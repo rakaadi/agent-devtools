@@ -1,0 +1,64 @@
+const REDUX_STATE_URI = 'debug://redux/state'
+
+interface ConnectionManagerLike {
+  isConnected: () => boolean
+  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
+}
+
+interface ReduxStateResourceConfig {
+  MAX_RESPONSE_CHARS: number
+}
+
+interface ReduxStateResource {
+  uri: string
+  read: () => Promise<{
+    contents: Array<{
+      uri: string
+      mimeType: 'application/json'
+      text: string
+    }>
+  }>
+}
+
+export function createReduxStateResource(
+  connectionManager: ConnectionManagerLike,
+  config: ReduxStateResourceConfig,
+): ReduxStateResource {
+  return {
+    uri: REDUX_STATE_URI,
+    read: async () => {
+      if (!connectionManager.isConnected()) {
+        return {
+          contents: [
+            {
+              uri: REDUX_STATE_URI,
+              mimeType: 'application/json',
+              text: JSON.stringify({ error: { code: 'NOT_CONNECTED' } }),
+            },
+          ],
+        }
+      }
+
+      const result = (await connectionManager.request('debug_get_snapshot', {
+        stream: 'redux',
+      })) as { snapshot?: unknown }
+
+      const rawText = JSON.stringify(result.snapshot)
+      let text = rawText
+
+      if (rawText.length > config.MAX_RESPONSE_CHARS) {
+        text = `${rawText.slice(0, config.MAX_RESPONSE_CHARS)}\n...[TRUNCATED due to MAX_RESPONSE_CHARS]`
+      }
+
+      return {
+        contents: [
+          {
+            uri: REDUX_STATE_URI,
+            mimeType: 'application/json',
+            text,
+          },
+        ],
+      }
+    },
+  }
+}
