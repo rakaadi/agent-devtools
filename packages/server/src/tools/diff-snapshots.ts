@@ -174,7 +174,10 @@ export function createDiffSnapshotsTool(
         seq: input.target_seq,
       })
 
-      if (baseResult?.snapshot === undefined || targetResult?.snapshot === undefined) {
+      const baseSnapshot = (baseResult as { snapshot?: unknown } | undefined)?.snapshot
+      const targetSnapshot = (targetResult as { snapshot?: unknown } | undefined)?.snapshot
+
+      if (baseSnapshot === undefined || targetSnapshot === undefined) {
         return createToolError('SNAPSHOT_NOT_FOUND', 'One or both snapshots were not found.')
       }
 
@@ -182,7 +185,7 @@ export function createDiffSnapshotsTool(
       const maxChanges = clampMaxChanges(input.max_changes)
 
       const allChanges: DiffChange[] = []
-      collectChanges(baseResult?.snapshot, targetResult?.snapshot, '', 0, maxDepth, allChanges)
+      collectChanges(baseSnapshot, targetSnapshot, '', 0, maxDepth, allChanges)
 
       return {
         baseSeq: input.base_seq,

@@ -45,7 +45,9 @@ export function createGetStatePathTool(connectionManager: ConnectionManagerLike)
       }
 
       const stream = input.stream ?? 'redux'
-      const result = await connectionManager.request('debug_get_snapshot', { stream })
+      const result = (await connectionManager.request('debug_get_snapshot', { stream })) as {
+        snapshot?: unknown
+      } | undefined
       const value = resolveJsonPath(result?.snapshot, input.path)
 
       if (value === undefined) {
