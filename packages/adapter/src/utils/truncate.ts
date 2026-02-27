@@ -1,6 +1,24 @@
-import { sizeof } from './sizeof.ts'
+import { sizeof } from './sizeof.js'
 
 const TRUNCATED_SENTINEL = '[truncated]'
+const MIN_STRING_SIZE = sizeof('')
+const MIN_NUMBER_SIZE = sizeof(0)
+
+function fitWithinLimit(payload: unknown, maxSize: number): unknown {
+  if (sizeof(payload) <= maxSize) {
+    return payload
+  }
+
+  if (maxSize >= MIN_STRING_SIZE) {
+    return ''
+  }
+
+  if (maxSize >= MIN_NUMBER_SIZE) {
+    return 0
+  }
+
+  return undefined
+}
 
 function truncateArray(payload: unknown[], maxSize: number): unknown[] {
   if (payload.length === 0) {
@@ -32,13 +50,23 @@ function truncateObject(payload: Record<string, unknown>, maxSize: number): Reco
   const result: Record<string, unknown> = { ...payload }
 
   while (sizeof(result) > maxSize) {
-    const entries = Object.entries(result)
-      .filter(([, value]) => value !== TRUNCATED_SENTINEL)
-      .map(([key, value]) => ({ key, size: sizeof(value) }))
+    let largestKey: string | undefined
+    let largestSize = -1
 
-    if (entries.length > 0) {
-      entries.sort((a, b) => b.size - a.size)
-      result[entries[0].key] = TRUNCATED_SENTINEL
+    for (const [key, value] of Object.entries(result)) {
+      if (value === TRUNCATED_SENTINEL) {
+        continue
+      }
+
+      const valueSize = sizeof(value)
+      if (valueSize > largestSize) {
+        largestSize = valueSize
+        largestKey = key
+      }
+    }
+
+    if (largestKey !== undefined) {
+      result[largestKey] = TRUNCATED_SENTINEL
       continue
     }
 
@@ -69,16 +97,20 @@ export function truncatePayload(payload: unknown, maxSize: number): {
   }
 
   if (typeof payload === 'string') {
+    const truncatedString = TRUNCATED_SENTINEL.slice(0, Math.max(0, maxSize - 2))
+
     return {
-      payload: TRUNCATED_SENTINEL,
+      payload: fitWithinLimit(truncatedString, maxSize),
       truncated: true,
       originalSize,
     }
   }
 
   if (Array.isArray(payload)) {
+    const truncatedArray = truncateArray(payload, maxSize)
+
     return {
-      payload: truncateArray(payload, maxSize),
+      payload: fitWithinLimit(truncatedArray, maxSize),
       truncated: true,
       originalSize,
     }
@@ -86,14 +118,14 @@ export function truncatePayload(payload: unknown, maxSize: number): {
 
   if (payload && typeof payload === 'object') {
     return {
-      payload: truncateObject(payload as Record<string, unknown>, maxSize),
+      payload: fitWithinLimit(truncateObject(payload as Record<string, unknown>, maxSize), maxSize),
       truncated: true,
       originalSize,
     }
   }
 
   return {
-    payload: TRUNCATED_SENTINEL,
+    payload: fitWithinLimit(TRUNCATED_SENTINEL, maxSize),
     truncated: true,
     originalSize,
   }

@@ -97,6 +97,31 @@ describe('truncatePayload', () => {
       originalSize: expect.any(Number),
     })
   })
+  it('keeps oversized string payload within maxSize even when maxSize is smaller than [truncated]', () => {
+    // Arrange
+    const payload = 's'.repeat(50_000)
+    const maxSize = 5
+
+    // Act
+    const result = truncatePayload(payload, maxSize)
+
+    // Assert
+    expect(result.truncated).toBe(true)
+    expect(sizeof(result.payload)).toBeLessThanOrEqual(maxSize)
+  })
+
+  it('keeps oversized array payload within maxSize even when truncation markers cannot fit', () => {
+    // Arrange
+    const payload = Array.from({ length: 50 }, (_, index) => `item-${index}`)
+    const maxSize = 1
+
+    // Act
+    const result = truncatePayload(payload, maxSize)
+
+    // Assert
+    expect(result.truncated).toBe(true)
+    expect(sizeof(result.payload)).toBeLessThanOrEqual(maxSize)
+  })
 
   it('returns payload, truncated flag, and originalSize shape for oversized payloads', () => {
     // Arrange

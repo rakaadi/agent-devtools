@@ -4,26 +4,32 @@ function utf8Bytes(text: string): number {
   return encoder.encode(text).length
 }
 
+function isJsonOmitted(value: unknown): value is undefined | symbol | ((...args: unknown[]) => unknown) {
+  return value === undefined || typeof value === 'function' || typeof value === 'symbol'
+}
+
 function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
     return utf8Bytes(JSON.stringify(value))
   }
 
   if (Array.isArray(value)) {
-    if (seen.has(value)) {
+    const arrayValue = value as unknown[]
+
+    if (seen.has(arrayValue)) {
       return 4
     }
 
-    seen.add(value)
+    seen.add(arrayValue)
 
     let total = 2
-    for (let i = 0; i < value.length; i += 1) {
+    for (let i = 0; i < arrayValue.length; i += 1) {
       if (i > 0) {
         total += 1
       }
 
-      const item = value[i]
-      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
+      const item = arrayValue[i]
+      if (isJsonOmitted(item)) {
         total += 4
       } else {
         total += sizeOfJson(item, seen)
@@ -46,7 +52,7 @@ function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
     let isFirst = true
 
     for (const [key, item] of Object.entries(objectValue)) {
-      if (item === undefined || typeof item === 'function' || typeof item === 'symbol') {
+      if (isJsonOmitted(item)) {
         continue
       }
 
@@ -67,7 +73,7 @@ function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
 }
 
 export function sizeof(value: unknown): number {
-  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+  if (isJsonOmitted(value)) {
     return 0
   }
 
