@@ -27,6 +27,41 @@ export interface McpServerLike {
   registeredResources?: unknown[]
 }
 
+interface ToolHandler {
+  (...args: unknown[]): Promise<unknown> | unknown
+}
+
+function hasToolError(result: unknown): boolean {
+  if (typeof result !== 'object' || result === null) {
+    return false
+  }
+
+  if (!('isError' in result)) {
+    return false
+  }
+
+  return (result as { isError?: unknown }).isError === true
+}
+
+function createStructuredToolHandler(
+  handler: ToolHandler,
+  preserveToolError: boolean,
+): (...args: unknown[]) => Promise<unknown> {
+  return async function structuredToolHandler(...args: unknown[]): Promise<unknown> {
+    const result = await handler(...args)
+
+    if (preserveToolError && hasToolError(result)) {
+      return result
+    }
+
+    return {
+      content: [],
+      structuredContent: result as Record<string, unknown>,
+      isError: false,
+    }
+  }
+}
+
 export function createMcpServer(
   connectionManager: ConnectionManagerLike,
   config: ServerConfigLike,
@@ -45,13 +80,21 @@ export function createMcpServer(
     : maybeConstructor(serverOptions)
 
   const healthCheckTool = createHealthCheckTool(connectionManager)
-  server.registerTool('debug_health_check', healthCheckTool, healthCheckTool.handler)
+  server.registerTool(
+    'debug_health_check',
+    healthCheckTool,
+    createStructuredToolHandler(healthCheckTool.handler as ToolHandler, false),
+  )
 
   const listStreamsTool = createListStreamsTool(connectionManager)
   server.registerTool('debug_list_streams', listStreamsTool, listStreamsTool.handler)
 
   const getSnapshotTool = createGetSnapshotTool(connectionManager)
-  server.registerTool('debug_get_snapshot', getSnapshotTool, getSnapshotTool.handler)
+  server.registerTool(
+    'debug_get_snapshot',
+    getSnapshotTool,
+    createStructuredToolHandler(getSnapshotTool.handler as ToolHandler, true),
+  )
 
   const queryEventsTool = createQueryEventsTool(connectionManager, config)
   server.registerTool('debug_query_events', queryEventsTool, queryEventsTool.handler)

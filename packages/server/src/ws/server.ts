@@ -23,6 +23,23 @@ interface WsServerHandle {
   close: () => Promise<void>
 }
 
+function normalizeHost(host: string): string {
+  if (host.startsWith('[')) {
+    return host.slice(1).split(']')[0]
+  }
+
+  return host.split(':')[0]
+}
+
+function createAllowedHosts(configuredHost: string): Set<string> {
+  return new Set([
+    'localhost',
+    '127.0.0.1',
+    '::1',
+    normalizeHost(configuredHost),
+  ])
+}
+
 export function createWsServer(
   config: WsServerConfig,
   connectionManager: ConnectionManagerLike,
@@ -35,6 +52,8 @@ export function createWsServer(
     ? 30000 + Math.floor(Math.random() * 10000)
     : config.port
 
+  const allowedHosts = createAllowedHosts(config.host)
+
   httpServer.on('upgrade', (request, socket, head) => {
     const origin = request.headers.origin
     const isAllowed = typeof origin !== 'string' || config.allowedOrigins.includes(origin)
@@ -43,6 +62,18 @@ export function createWsServer(
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
       socket.destroy()
       logger.warn('Rejected websocket upgrade from disallowed origin', origin)
+      return
+    }
+
+    const hostHeader = request.headers.host
+    const normalizedHost = typeof hostHeader === 'string'
+      ? normalizeHost(hostHeader)
+      : ''
+
+    if (!allowedHosts.has(normalizedHost)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+      socket.destroy()
+      logger.warn('Rejected websocket upgrade from disallowed host', hostHeader)
       return
     }
 

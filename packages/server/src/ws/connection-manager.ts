@@ -9,6 +9,7 @@ interface LoggerLike {
 
 interface SocketLike {
   on(event: 'message', listener: (data: unknown) => void): unknown
+  on(event: 'close', listener: () => void): unknown
   send(data: string): void
   close(code?: number): void
 }
@@ -29,6 +30,18 @@ interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (reason: unknown) => void
   timeout: ReturnType<typeof setTimeout>
+}
+
+function parseSocketMessageData(data: unknown): unknown {
+  if (typeof data === 'string') {
+    return JSON.parse(data)
+  }
+
+  if (Buffer.isBuffer(data)) {
+    return JSON.parse(data.toString('utf8'))
+  }
+
+  return data
 }
 
 export class ConnectionManager {
@@ -56,6 +69,14 @@ export class ConnectionManager {
 
     socket.on('message', data => {
       this.handleIncomingMessage(data)
+    })
+
+    socket.on('close', () => {
+      if (this.currentSocket !== socket) return
+
+      this.currentSocket = null
+      this.adapterInfo = null
+      this.rejectAllPending('Connection closed')
     })
   }
 
@@ -100,7 +121,7 @@ export class ConnectionManager {
     let parsedJson: unknown
 
     try {
-      parsedJson = typeof data === 'string' ? JSON.parse(data) : data
+      parsedJson = parseSocketMessageData(data)
     } catch {
       this.logger.warn('Ignoring non-JSON socket message')
       return
