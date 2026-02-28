@@ -50,10 +50,6 @@ This project uses **Vitest** as the primary runner and **Jest** for broader comp
 # Vitest
 npx vitest run <path-to-test-file> --reporter=verbose
 npx vitest run --reporter=verbose
-
-# Jest
-npx jest <path-to-test-file> --no-coverage --verbose
-npx jest --no-coverage --verbose
 ```
 
 ### Per-Cycle Checklist
@@ -126,7 +122,7 @@ Detect the runner and run only the new test file:
 
 ```bash
 # Check for Vitest config first
-ls vitest.config.* 2>/dev/null && npx vitest run <test-file-path> --reporter=verbose || npx jest <test-file-path> --no-coverage --verbose
+ls vitest.config.* 2>/dev/null && npx vitest run <test-file-path> --reporter=verbose
 ```
 
 Read the output with `#tool:read/terminalLastCommand`. A valid Red-phase result has exactly one of these failure shapes:

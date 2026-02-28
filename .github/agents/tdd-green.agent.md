@@ -50,10 +50,6 @@ This project uses **Vitest** as the primary runner and **Jest** for broader comp
 # Vitest
 npx vitest run <path-to-test-file> --reporter=verbose
 npx vitest run --reporter=verbose
-
-# Jest
-npx jest <path-to-test-file> --no-coverage --verbose
-npx jest --no-coverage --verbose
 ```
 
 ### Per-Cycle Checklist
@@ -92,8 +88,6 @@ If anything is missing, ask the Orchestrator rather than guessing. Then verify t
 
 ```bash
 npx vitest run <test-file-path> --reporter=verbose
-# or
-npx jest <test-file-path> --no-coverage --verbose
 ```
 
 Read the output with `#tool:read/terminalLastCommand`. If the test is already passing, stop immediately and report this anomaly to the Orchestrator — do not write any implementation.
@@ -126,8 +120,6 @@ Do not add error handling, logging, or edge-case logic that the current test doe
 
 ```bash
 npx vitest run <test-file-path> --reporter=verbose
-# or
-npx jest <test-file-path> --no-coverage --verbose
 ```
 
 Read the output with `#tool:read/terminalLastCommand`. You need to see the specific test from the Red phase showing as passed. If it is still failing, work through the gap between what the test asserts and what your implementation returns. Iterate — adjust the implementation, re-run, check the terminal — until the test passes. Do not move on until it is green.
@@ -138,8 +130,6 @@ Read the output with `#tool:read/terminalLastCommand`. You need to see the speci
 
 ```bash
 npx vitest run --reporter=verbose
-# or
-npx jest --no-coverage --verbose
 ```
 
 If any previously passing tests are now failing, your implementation introduced a regression. Common causes include naming conflicts, unintended side effects on shared module state, or a new export that shadows an existing one. Diagnose and fix the regression before reporting back. Do not deliver a report that includes broken pre-existing tests.
