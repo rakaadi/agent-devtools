@@ -8,7 +8,7 @@ function isJsonOmitted(value: unknown): value is undefined | symbol | ((...args:
   return value === undefined || typeof value === 'function' || typeof value === 'symbol'
 }
 
-function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
+function sizeOfJson(value: unknown, seen: WeakSet<object>, key: string): number {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
     return utf8Bytes(JSON.stringify(value))
   }
@@ -32,7 +32,7 @@ function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
       if (isJsonOmitted(item)) {
         total += 4
       } else {
-        total += sizeOfJson(item, seen)
+        total += sizeOfJson(item, seen, String(i))
       }
     }
 
@@ -40,7 +40,17 @@ function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
   }
 
   if (typeof value === 'object') {
-    const objectValue = value as Record<string, unknown>
+    const objectValue = value as Record<string, unknown> & { toJSON?: (jsonKey: string) => unknown }
+
+    if (typeof objectValue.toJSON === 'function') {
+      const serializedValue = objectValue.toJSON(key)
+
+      if (isJsonOmitted(serializedValue)) {
+        return 4
+      }
+
+      return sizeOfJson(serializedValue, seen, key)
+    }
 
     if (seen.has(objectValue)) {
       return 4
@@ -62,7 +72,7 @@ function sizeOfJson(value: unknown, seen: WeakSet<object>): number {
 
       total += utf8Bytes(JSON.stringify(key))
       total += 1
-      total += sizeOfJson(item, seen)
+      total += sizeOfJson(item, seen, key)
       isFirst = false
     }
 
@@ -77,5 +87,5 @@ export function sizeof(value: unknown): number {
     return 0
   }
 
-  return sizeOfJson(value, new WeakSet())
+  return sizeOfJson(value, new WeakSet(), '')
 }

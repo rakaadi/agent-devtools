@@ -1,10 +1,12 @@
-export function uuid(): string {
-  if (typeof globalThis.crypto?.getRandomValues !== 'function') {
-    throw new Error('crypto.getRandomValues is not available')
-  }
+const getRandomValues = globalThis.crypto?.getRandomValues?.bind(globalThis.crypto)
 
+if (typeof getRandomValues !== 'function') {
+  throw new Error('crypto.getRandomValues is not available at init')
+}
+
+export function uuid(): string {
   const bytes = new Uint8Array(16)
-  globalThis.crypto.getRandomValues(bytes)
+  getRandomValues(bytes)
 
   bytes[6] = (bytes[6] & 0x0f) | 0x40
   bytes[8] = (bytes[8] & 0x3f) | 0x80
