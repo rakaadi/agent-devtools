@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import type { ConnectionManagerLike } from '../types/connection-manager.ts'
 import { createToolError } from '../types/errors.ts'
+import type { ToolDefinition } from '../types/tool.ts'
 
 function clampLimit(limit?: number): number {
   if (typeof limit !== 'number' || Number.isNaN(limit)) return 50
@@ -36,29 +38,10 @@ const QueryEventsResponseSchema = z.object({
   latestSeq: z.number().int().nullable().optional(),
 })
 
-interface ConnectionManagerLike {
-  isConnected?: () => boolean
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
-
-interface QueryEventsToolDefinition {
-  title: string
-  description: string
-  inputSchema: z.ZodTypeAny
-  outputSchema: z.ZodTypeAny
-  annotations: typeof ToolAnnotations
-  handler: (input: {
-    stream?: string
-    limit?: number
-    since_seq?: number
-    event_type?: string
-  }) => Promise<unknown>
-}
-
 export function createQueryEventsTool(
   connectionManager: ConnectionManagerLike,
   config: { MAX_RESPONSE_CHARS: number },
-): QueryEventsToolDefinition {
+): ToolDefinition {
   return {
     title: 'Query Debug Events',
     description: 'Query stream events with filtering, pagination, and bounded response text.',
@@ -71,7 +54,7 @@ export function createQueryEventsTool(
       since_seq?: number
       event_type?: string
     }) => {
-      if (connectionManager.isConnected?.() === false) {
+      if (!connectionManager.isConnected()) {
         return createToolError('NOT_CONNECTED', 'No app adapter is connected.')
       }
 
@@ -94,20 +77,13 @@ export function createQueryEventsTool(
       }
 
       const rawText = JSON.stringify(structuredContent)
-      const maxChars = config.MAX_RESPONSE_CHARS
-      let text = rawText
-      if (rawText.length > maxChars) {
-        text = `${rawText.slice(0, maxChars)}\n...[TRUNCATED due to MAX_RESPONSE_CHARS]`
-      }
+      const text = rawText.length > config.MAX_RESPONSE_CHARS
+        ? `${rawText.slice(0, config.MAX_RESPONSE_CHARS)}\n...[TRUNCATED due to MAX_RESPONSE_CHARS]`
+        : rawText
 
       return {
         structuredContent,
-        content: [
-          {
-            type: 'text' as const,
-            text,
-          },
-        ],
+        content: [{ type: 'text' as const, text }],
       }
     },
   }

@@ -1,18 +1,14 @@
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createMcpServer as createRealMcpServer } from './server.ts'
 import { loadConfig as loadRealConfig } from './types/config.ts'
+import type { ConnectionManagerWithInfo } from './types/connection-manager.ts'
+import type { LoggerLike } from './types/logger.ts'
 import { createLogger as createRealLogger } from './utils/logger.ts'
 import { ConnectionManager } from './ws/connection-manager.ts'
 import { createWsServer } from './ws/server.ts'
 import type { Config } from './types/config.ts'
 import type { Logger } from './utils/logger.ts'
 import type { McpServerLike } from './server.ts'
-
-interface ConnectionManagerLike {
-  isConnected: () => boolean
-  getAdapterInfo: () => unknown
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
 
 interface WsServerHandleLike {
   close?: () => Promise<unknown> | unknown
@@ -24,13 +20,13 @@ type StartupDeps = {
   createConnectionManager: (options: {
     REQUEST_TIMEOUT_MS: number
     logger: Logger
-  }) => ConnectionManagerLike
+  }) => ConnectionManagerWithInfo
   startWsServer: (
     config: { host: string, port: number },
-    connectionManager: ConnectionManagerLike,
+    connectionManager: ConnectionManagerWithInfo,
     logger: Logger,
   ) => WsServerHandleLike
-  createMcpServer: (connectionManager: ConnectionManagerLike, config: Config) => McpServerLike
+  createMcpServer: (connectionManager: ConnectionManagerWithInfo, config: Config) => McpServerLike
   createStdioTransport: () => StdioServerTransport
   connectStdioTransport: (
     server: McpServerLike,
@@ -41,44 +37,32 @@ type StartupDeps = {
   processExit: (code: number) => void
 }
 
+function createLoggerBridge(logger: Logger): LoggerLike {
+  return {
+    debug: (...args: unknown[]) => logger.debug(String(args[0] ?? ''), args[1]),
+    info: (...args: unknown[]) => logger.info(String(args[0] ?? ''), args[1]),
+    warn: (...args: unknown[]) => logger.warn(String(args[0] ?? ''), args[1]),
+    error: (...args: unknown[]) => logger.error(String(args[0] ?? ''), args[1]),
+  }
+}
+
 const defaultDeps: StartupDeps = {
   loadConfig: loadRealConfig,
   createLogger: createRealLogger,
-  createConnectionManager: options => {
-    const loggerBridge = {
-      debug: (...args: unknown[]) => options.logger.debug(String(args[0] ?? ''), args[1]),
-      info: (...args: unknown[]) => options.logger.info(String(args[0] ?? ''), args[1]),
-      warn: (...args: unknown[]) => options.logger.warn(String(args[0] ?? ''), args[1]),
-      error: (...args: unknown[]) => options.logger.error(String(args[0] ?? ''), args[1]),
-    }
-
-    return new ConnectionManager({
-      REQUEST_TIMEOUT_MS: options.REQUEST_TIMEOUT_MS,
-      logger: loggerBridge,
-    })
-  },
+  createConnectionManager: options => new ConnectionManager({
+    REQUEST_TIMEOUT_MS: options.REQUEST_TIMEOUT_MS,
+    logger: createLoggerBridge(options.logger),
+  }),
   startWsServer: (config, connectionManager, logger) => createWsServer(
-    {
-      ...config,
-      allowedOrigins: [],
-    },
+    { ...config, allowedOrigins: [] },
     connectionManager as unknown as { handleConnection: (socket: unknown) => void },
-    {
-      debug: (...args: unknown[]) => logger.debug(String(args[0] ?? ''), args[1]),
-      info: (...args: unknown[]) => logger.info(String(args[0] ?? ''), args[1]),
-      warn: (...args: unknown[]) => logger.warn(String(args[0] ?? ''), args[1]),
-      error: (...args: unknown[]) => logger.error(String(args[0] ?? ''), args[1]),
-    },
+    createLoggerBridge(logger),
   ),
   createMcpServer: createRealMcpServer,
   createStdioTransport: () => new StdioServerTransport(),
-  connectStdioTransport: (server, transport) =>
-    (server as unknown as { connect: (receivedTransport: StdioServerTransport) => Promise<unknown> | unknown })
-      .connect(transport),
+  connectStdioTransport: (server, transport) => server.connect?.(transport),
   onSignal: (event, handler) => process.on(event, handler),
-  closeStdioTransport: transport => {
-    (transport as { close?: () => Promise<unknown> | unknown }).close?.()
-  },
+  closeStdioTransport: transport => transport.close(),
   processExit: code => {
     try {
       process.exit(code)
@@ -125,25 +109,18 @@ export async function startServer(deps: Partial<StartupDeps> = {}): Promise<void
   const transport = createStdioTransport()
   await connectStdioTransport(server, transport)
 
-  const websocketEndpoint = `${config.WS_HOST}:${config.WS_PORT}`
-  const registeredTools = server.registeredTools
-  const registeredToolCount = Array.isArray(registeredTools)
-    ? registeredTools.length
-    : 0
-  const registeredResources = server.registeredResources
-  const registeredResourceCount = Array.isArray(registeredResources)
-    ? registeredResources.length
-    : 0
+  const registeredToolCount = server.registeredTools?.length ?? 0
+  const registeredResourceCount = server.registeredResources?.length ?? 0
 
   logger.info('Server startup summary', {
-    websocketEndpoint,
+    websocketEndpoint: `${config.WS_HOST}:${config.WS_PORT}`,
     registeredToolCount,
     registeredResourceCount,
     serverVersion: '0.0.1',
   })
 
   const handleShutdown = (): void => {
-    (wsServer as { close?: () => Promise<unknown> | unknown }).close?.()
+    wsServer.close?.()
     closeStdioTransport(transport)
     processExit(0)
   }

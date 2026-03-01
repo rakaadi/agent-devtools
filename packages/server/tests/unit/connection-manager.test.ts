@@ -46,7 +46,7 @@ describe('ConnectionManager', () => {
     const secondSocket = new FakeSocket()
 
     // Act + Assert (handshake -> connected)
-    manager.setConnection(firstSocket)
+    manager.handleConnection(firstSocket)
     firstSocket.emitMessage({
       type: 'handshake',
       sessionId: 'session-1',
@@ -78,7 +78,7 @@ describe('ConnectionManager', () => {
 
     // Act + Assert (replacement rejects in-flight + closes old socket)
     const pending = manager.request('debug_get_snapshot', { stream: 'redux' })
-    manager.setConnection(secondSocket)
+    manager.handleConnection(secondSocket)
 
     await expect(pending).rejects.toThrow(/replaced|closed|connection/i)
     expect(firstSocket.closeCalls).toEqual([{ code: 4001 }])

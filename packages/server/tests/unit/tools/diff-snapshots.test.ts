@@ -29,6 +29,7 @@ describe('createDiffSnapshotsTool', () => {
     }
 
     const connectionManager = {
+      isConnected: vi.fn(() => true),
       request: vi.fn(async (_method: string, params: { seq: number }) => ({
         snapshot: snapshotsBySeq[params.seq],
       })),

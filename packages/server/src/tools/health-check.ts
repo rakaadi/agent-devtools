@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import type { ConnectionManagerWithInfo } from '../types/connection-manager.ts'
+import type { ToolDefinition } from '../types/tool.ts'
 
 const ToolAnnotations = {
   readOnlyHint: true,
@@ -31,26 +33,7 @@ const StreamsResponseSchema = z.object({
   streams: z.array(StreamMetadataSchema).optional(),
 })
 
-interface ConnectionManagerLike {
-  isConnected: () => boolean
-  getAdapterInfo: () => unknown
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
-
-interface HealthCheckToolDefinition {
-  title: string
-  description: string
-  inputSchema: z.ZodTypeAny
-  outputSchema: z.ZodTypeAny
-  annotations: typeof ToolAnnotations
-  handler: () => Promise<{
-    connected: boolean
-    adapter: unknown
-    streams: unknown[]
-  }>
-}
-
-export function createHealthCheckTool(connectionManager: ConnectionManagerLike): HealthCheckToolDefinition {
+export function createHealthCheckTool(connectionManager: ConnectionManagerWithInfo): ToolDefinition {
   return {
     title: 'Debug Health Check',
     description: 'Check adapter connection status and stream metadata.',
@@ -59,11 +42,7 @@ export function createHealthCheckTool(connectionManager: ConnectionManagerLike):
     annotations: ToolAnnotations,
     handler: async () => {
       if (!connectionManager.isConnected()) {
-        return {
-          connected: false,
-          adapter: null,
-          streams: [],
-        }
+        return { connected: false, adapter: null, streams: [] }
       }
 
       const adapter = connectionManager.getAdapterInfo()

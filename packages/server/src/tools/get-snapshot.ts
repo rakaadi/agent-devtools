@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import type { ConnectionManagerLike } from '../types/connection-manager.ts'
 import { createToolError } from '../types/errors.ts'
+import type { ToolDefinition } from '../types/tool.ts'
 import { resolveJsonPath } from '../utils/json-path.ts'
 
 const ToolAnnotations = {
@@ -18,21 +20,7 @@ const OutputSchema = z.object({
   snapshot: z.unknown(),
 })
 
-interface ConnectionManagerLike {
-  isConnected?: () => boolean
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
-
-interface GetSnapshotToolDefinition {
-  title: string
-  description: string
-  inputSchema: z.ZodTypeAny
-  outputSchema: z.ZodTypeAny
-  annotations: typeof ToolAnnotations
-  handler: (input: { stream: string, scope?: string }) => Promise<unknown>
-}
-
-export function createGetSnapshotTool(connectionManager: ConnectionManagerLike): GetSnapshotToolDefinition {
+export function createGetSnapshotTool(connectionManager: ConnectionManagerLike): ToolDefinition {
   return {
     title: 'Get Debug Snapshot',
     description: 'Retrieve the latest snapshot for a stream, optionally scoped by JSON path.',
@@ -40,15 +28,13 @@ export function createGetSnapshotTool(connectionManager: ConnectionManagerLike):
     outputSchema: OutputSchema,
     annotations: ToolAnnotations,
     handler: async (input: { stream: string, scope?: string }) => {
-      if (connectionManager.isConnected?.() === false) {
+      if (!connectionManager.isConnected()) {
         return createToolError('NOT_CONNECTED', 'No app adapter is connected.')
       }
 
       const result = (await connectionManager.request('debug_get_snapshot', {
         stream: input.stream,
-      })) as {
-        snapshot?: unknown
-      }
+      })) as { snapshot?: unknown }
 
       const snapshot = result?.snapshot
 

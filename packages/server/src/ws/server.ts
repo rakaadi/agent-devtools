@@ -1,5 +1,7 @@
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage } from 'node:http'
+import type { Duplex } from 'node:stream'
 import { WebSocketServer } from 'ws'
+import type { LoggerLike } from '../types/logger.ts'
 
 interface WsServerConfig {
   host: string
@@ -9,13 +11,6 @@ interface WsServerConfig {
 
 interface ConnectionManagerLike {
   handleConnection: (socket: unknown) => void
-}
-
-interface LoggerLike {
-  debug: (...args: unknown[]) => void
-  info: (...args: unknown[]) => void
-  warn: (...args: unknown[]) => void
-  error: (...args: unknown[]) => void
 }
 
 interface WsServerHandle {
@@ -40,6 +35,12 @@ function createAllowedHosts(configuredHost: string): Set<string> {
   ])
 }
 
+function rejectUpgrade(socket: Duplex, logger: LoggerLike, reason: string, detail?: string): void {
+  socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+  socket.destroy()
+  logger.warn(reason, detail)
+}
+
 export function createWsServer(
   config: WsServerConfig,
   connectionManager: ConnectionManagerLike,
@@ -54,14 +55,11 @@ export function createWsServer(
 
   const allowedHosts = createAllowedHosts(config.host)
 
-  httpServer.on('upgrade', (request, socket, head) => {
+  httpServer.on('upgrade', (request: IncomingMessage, socket: Duplex, head: Buffer) => {
     const origin = request.headers.origin
-    const isAllowed = typeof origin !== 'string' || config.allowedOrigins.includes(origin)
 
-    if (!isAllowed) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
-      socket.destroy()
-      logger.warn('Rejected websocket upgrade from disallowed origin', origin)
+    if (typeof origin === 'string' && !config.allowedOrigins.includes(origin)) {
+      rejectUpgrade(socket, logger, 'Rejected websocket upgrade from disallowed origin', origin)
       return
     }
 
@@ -71,9 +69,7 @@ export function createWsServer(
       : ''
 
     if (!allowedHosts.has(normalizedHost)) {
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
-      socket.destroy()
-      logger.warn('Rejected websocket upgrade from disallowed host', hostHeader)
+      rejectUpgrade(socket, logger, 'Rejected websocket upgrade from disallowed host', hostHeader)
       return
     }
 

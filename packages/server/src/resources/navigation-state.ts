@@ -1,9 +1,6 @@
-const NAVIGATION_STATE_URI = 'debug://navigation/state'
+import type { ConnectionManagerLike } from '../types/connection-manager.ts'
 
-interface ConnectionManagerLike {
-  isConnected: () => boolean
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
+const NAVIGATION_STATE_URI = 'debug://navigation/state'
 
 interface NavigationStateResourceConfig {
   MAX_RESPONSE_CHARS: number
@@ -44,11 +41,9 @@ export function createNavigationStateResource(
       })) as { snapshot?: unknown }
 
       const rawText = JSON.stringify(result.snapshot)
-      let text = rawText
-
-      if (rawText.length > config.MAX_RESPONSE_CHARS) {
-        text = `${rawText.slice(0, config.MAX_RESPONSE_CHARS)}\n...[TRUNCATED due to MAX_RESPONSE_CHARS]`
-      }
+      const text = rawText.length > config.MAX_RESPONSE_CHARS
+        ? `${rawText.slice(0, config.MAX_RESPONSE_CHARS)}\n...[TRUNCATED due to MAX_RESPONSE_CHARS]`
+        : rawText
 
       return {
         contents: [

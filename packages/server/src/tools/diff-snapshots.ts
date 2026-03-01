@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import type { ConnectionManagerLike } from '../types/connection-manager.ts'
 import { createToolError } from '../types/errors.ts'
+import type { ToolDefinition } from '../types/tool.ts'
 
 type DiffChange = {
   path: string
@@ -110,43 +112,21 @@ const OutputSchema = z.object({
   totalChanges: z.number().int().nonnegative(),
 })
 
-interface ConnectionManagerLike {
-  isConnected?: () => boolean
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
-
-interface DiffSnapshotsToolDefinition {
-  title: string
-  description: string
-  inputSchema: z.ZodTypeAny
-  outputSchema: z.ZodTypeAny
-  annotations: typeof ToolAnnotations
-  handler: (input: {
-    stream: string
-    base_seq: number
-    target_seq: number
-    max_depth?: number
-    max_changes?: number
-  }) => Promise<unknown>
-}
-
-const clampMaxDepth = (value: number | undefined): number => {
+function clampMaxDepth(value: number | undefined): number {
   if (value === undefined) return 10
   if (value < 1) return 1
   if (value > 50) return 50
   return value
 }
 
-const clampMaxChanges = (value: number | undefined): number => {
+function clampMaxChanges(value: number | undefined): number {
   if (value === undefined) return 500
   if (value < 1) return 1
   if (value > 2000) return 2000
   return value
 }
 
-export function createDiffSnapshotsTool(
-  connectionManager: ConnectionManagerLike,
-): DiffSnapshotsToolDefinition {
+export function createDiffSnapshotsTool(connectionManager: ConnectionManagerLike): ToolDefinition {
   return {
     title: 'Diff Debug Snapshots',
     description: 'Compute structural differences between two stream snapshots.',
@@ -160,7 +140,7 @@ export function createDiffSnapshotsTool(
       max_depth?: number
       max_changes?: number
     }) => {
-      if (connectionManager.isConnected?.() === false) {
+      if (!connectionManager.isConnected()) {
         return createToolError('NOT_CONNECTED', 'No app adapter is connected.')
       }
 

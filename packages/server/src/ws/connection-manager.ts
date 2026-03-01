@@ -1,11 +1,5 @@
 import { IncomingWireMessageSchema } from '@agent-devtools/shared'
-
-interface LoggerLike {
-  debug: (...args: unknown[]) => void
-  info: (...args: unknown[]) => void
-  warn: (...args: unknown[]) => void
-  error: (...args: unknown[]) => void
-}
+import type { LoggerLike } from '../types/logger.ts'
 
 interface SocketLike {
   on(event: 'message', listener: (data: unknown) => void): unknown
@@ -58,7 +52,7 @@ export class ConnectionManager {
     this.logger = options.logger
   }
 
-  setConnection(socket: SocketLike): void {
+  handleConnection(socket: SocketLike): void {
     if (this.currentSocket && this.currentSocket !== socket) {
       this.currentSocket.close(4001)
       this.rejectAllPending('Connection replaced')
@@ -80,10 +74,6 @@ export class ConnectionManager {
     })
   }
 
-  handleConnection(socket: SocketLike): void {
-    this.setConnection(socket)
-  }
-
   isConnected(): boolean {
     return this.adapterInfo !== null
   }
@@ -103,7 +93,7 @@ export class ConnectionManager {
         type: 'request',
         requestId,
         action,
-        ...(params === undefined ? {} : { params }),
+        ...(params !== undefined && { params }),
       }),
     )
 
@@ -134,13 +124,12 @@ export class ConnectionManager {
     }
 
     if (parsedMessage.data.type === 'handshake') {
+      const { sessionId, adapterVersion, streams, deviceInfo } = parsedMessage.data
       this.adapterInfo = {
-        sessionId: parsedMessage.data.sessionId,
-        adapterVersion: parsedMessage.data.adapterVersion,
-        streams: parsedMessage.data.streams,
-        ...(parsedMessage.data.deviceInfo === undefined
-          ? {}
-          : { deviceInfo: parsedMessage.data.deviceInfo }),
+        sessionId,
+        adapterVersion,
+        streams,
+        ...(deviceInfo !== undefined && { deviceInfo }),
       }
       return
     }

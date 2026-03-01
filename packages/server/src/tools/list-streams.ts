@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import type { ConnectionManagerLike } from '../types/connection-manager.ts'
 import { createToolError } from '../types/errors.ts'
+import type { ToolDefinition } from '../types/tool.ts'
 
 const ToolAnnotations = {
   readOnlyHint: true,
@@ -25,21 +27,7 @@ const StreamsResponseSchema = z.object({
   streams: z.array(StreamMetadataSchema).optional(),
 })
 
-interface ConnectionManagerLike {
-  isConnected: () => boolean
-  request: (action: string, params?: Record<string, unknown>) => Promise<unknown>
-}
-
-interface ListStreamsToolDefinition {
-  title: string
-  description: string
-  inputSchema: z.ZodTypeAny
-  outputSchema: z.ZodTypeAny
-  annotations: typeof ToolAnnotations
-  handler: () => Promise<unknown>
-}
-
-export function createListStreamsTool(connectionManager: ConnectionManagerLike): ListStreamsToolDefinition {
+export function createListStreamsTool(connectionManager: ConnectionManagerLike): ToolDefinition {
   return {
     title: 'List Debug Streams',
     description: 'List available debug streams and stream metadata.',
@@ -54,9 +42,8 @@ export function createListStreamsTool(connectionManager: ConnectionManagerLike):
       const result = StreamsResponseSchema.safeParse(
         await connectionManager.request('debug_list_streams'),
       )
-      return {
-        streams: result.success ? (result.data.streams ?? []) : [],
-      }
+
+      return { streams: result.success ? (result.data.streams ?? []) : [] }
     },
   }
 }
