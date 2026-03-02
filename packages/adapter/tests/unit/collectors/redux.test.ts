@@ -181,6 +181,28 @@ describe('createReduxCollector', () => {
     warnSpy.mockRestore()
   })
 
+  it('does not crash dispatch when emit callback throws and logs the failure', () => {
+    const emit = vi.fn(() => {
+      throw new Error('emit boom')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const collector = createReduxCollector<AppState, AppAction>(emit)
+    const next = vi.fn((action: AppAction) => action)
+
+    const dispatch = collector.middleware({
+      getState: () => ({
+        counter: { value: 0 },
+        session: { userId: null },
+      }),
+      dispatch: (action: AppAction) => action,
+    })(next)
+
+    expect(() => dispatch({ type: 'noop' })).not.toThrow()
+    expect(next).toHaveBeenCalledWith({ type: 'noop' })
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
   it('disables future emissions after destroy', () => {
     const emittedEvents: Array<Record<string, unknown>> = []
     const emit = vi.fn((event: Record<string, unknown>) => {

@@ -6,13 +6,14 @@ import {
   type DebugEvent,
 } from '@agent-devtools/shared'
 
-type WsMessageData = string | Buffer | ArrayBuffer | Buffer[]
-
 type WsLike = {
   readyState: number
   send: (data: string) => void
   close: () => void
-  on: (event: 'open' | 'close' | 'error' | 'message', listener: (...args: unknown[]) => void) => void
+  addEventListener: (
+    event: 'open' | 'close' | 'error' | 'message',
+    listener: (event: unknown) => void,
+  ) => void
 }
 
 type WsCtor = new (url: string) => WsLike
@@ -37,20 +38,22 @@ export interface WsClient {
   send: (event: DebugEvent) => void
 }
 
-function toText(data: WsMessageData): string {
+function toText(data: unknown): string {
   if (typeof data === 'string') {
     return data
   }
 
   if (data instanceof ArrayBuffer) {
-    return Buffer.from(data).toString('utf8')
+    return new TextDecoder().decode(new Uint8Array(data))
   }
 
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString('utf8')
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(
+      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+    )
   }
 
-  return data.toString('utf8')
+  return String(data)
 }
 
 export function createWsClient(config: WsClientConfig, handlers: WsHandlers): WsClient {
@@ -87,7 +90,7 @@ export function createWsClient(config: WsClientConfig, handlers: WsHandlers): Ws
         reject(new Error('WebSocket connection timeout'))
       }, timeoutMs)
 
-      socket.on('open', () => {
+      socket.addEventListener('open', () => {
         connected = true
         clearTimeout(timeoutId)
 
@@ -103,22 +106,24 @@ export function createWsClient(config: WsClientConfig, handlers: WsHandlers): Ws
         resolve()
       })
 
-      socket.on('close', () => {
+      socket.addEventListener('close', () => {
         connected = false
       })
 
-      socket.on('error', error => {
+      socket.addEventListener('error', (event: unknown) => {
         clearTimeout(timeoutId)
         if (!connected) {
-          reject(error instanceof Error ? error : new Error('WebSocket error'))
+          const wsError = (event as { error?: unknown }).error
+          reject(wsError instanceof Error ? wsError : new Error('WebSocket error'))
         }
       })
 
-      socket.on('message', async payload => {
+      socket.addEventListener('message', async (event: unknown) => {
+        const { data } = event as { data: unknown }
         let parsed: unknown
 
         try {
-          parsed = JSON.parse(toText(payload as WsMessageData))
+          parsed = JSON.parse(toText(data))
         } catch {
           return
         }
@@ -182,7 +187,7 @@ export function createWsClient(config: WsClientConfig, handlers: WsHandlers): Ws
       }
 
       await new Promise<void>(resolve => {
-        socket?.on('close', () => resolve())
+        socket?.addEventListener('close', () => resolve())
         socket?.close()
       })
 

@@ -1,8 +1,23 @@
+import type { StreamName } from '@agent-devtools/shared'
+import type { MmkvInstance } from './collectors/mmkv.ts'
+
+export interface ActionLike {
+  type: string
+  [key: string]: unknown
+}
+
+export interface MiddlewareApi<S, A extends ActionLike> {
+  getState: () => S
+  dispatch: (action: A) => A
+}
+
+export type Middleware<S, A extends ActionLike> = (
+  api: MiddlewareApi<S, A>,
+) => (next: (action: A) => A) => (action: A) => A
+
 export interface AdapterConfig {
   serverUrl?: string
 }
-
-type StreamName = 'redux' | 'navigation' | 'mmkv'
 
 export interface DebugAdapterHandle {
   captureSnapshot: (stream?: StreamName) => void
@@ -12,7 +27,7 @@ export interface DebugAdapterHandle {
 
 export interface ReduxStore<
   S extends Record<string, unknown> = Record<string, unknown>,
-  A extends { type: string, [key: string]: unknown } = { type: string, [key: string]: unknown },
+  A extends ActionLike = ActionLike,
 > extends Record<string, unknown> {
   getState: () => S
   subscribe: (listener: () => void) => () => void
@@ -28,4 +43,11 @@ export interface NavigationContainerRef {
     stale: boolean
   }
   isReady: () => boolean
+}
+
+export interface InitDebugAdapterOptions {
+  store?: ReduxStore
+  navigationRef?: NavigationContainerRef
+  mmkvInstances?: Record<string, MmkvInstance>
+  config?: AdapterConfig
 }

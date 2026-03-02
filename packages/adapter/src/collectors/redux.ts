@@ -1,23 +1,10 @@
+import type { ActionLike, Middleware } from '../types.ts'
 import { sizeof } from '../utils/sizeof.ts'
 
 export interface ReduxCollectorEvent {
   type: 'action_dispatched' | 'state_snapshot' | 'state_diff'
   [key: string]: unknown
 }
-
-interface ActionLike {
-  type: string
-  [key: string]: unknown
-}
-
-interface MiddlewareApi<S, A extends ActionLike> {
-  getState: () => S
-  dispatch: (action: A) => A
-}
-
-type Middleware<S, A extends ActionLike> = (
-  api: MiddlewareApi<S, A>,
-) => (next: (action: A) => A) => (action: A) => A
 
 export function createReduxCollector<S extends Record<string, unknown>, A extends ActionLike>(
   emit: (event: ReduxCollectorEvent) => void,
@@ -49,36 +36,35 @@ export function createReduxCollector<S extends Record<string, unknown>, A extend
 
       const result = next(action)
 
-      maybeEmit({
-        type: 'action_dispatched',
-        actionType: action.type,
-        ...(action.meta !== undefined
-          ? { meta: action.meta as Record<string, unknown> }
-          : {}),
-      })
-
-      let afterState: S | null = null
       try {
-        afterState = api.getState()
-      } catch (error) {
-        console.warn('Redux collector failed to read state after dispatch', error)
-      }
+        maybeEmit({
+          type: 'action_dispatched',
+          actionType: action.type,
+          ...(action.meta !== undefined
+            ? { meta: action.meta as Record<string, unknown> }
+            : {}),
+        })
 
-      if (beforeState && afterState) {
-        const keys = new Set([
-          ...Object.keys(beforeState),
-          ...Object.keys(afterState),
-        ])
-        for (const key of keys) {
-          if (beforeState[key] !== afterState[key]) {
-            maybeEmit({
-              type: 'state_diff',
-              path: key,
-              prev: beforeState[key],
-              next: afterState[key],
-            })
+        const afterState = api.getState()
+
+        if (beforeState && afterState) {
+          const keys = new Set([
+            ...Object.keys(beforeState),
+            ...Object.keys(afterState),
+          ])
+          for (const key of keys) {
+            if (beforeState[key] !== afterState[key]) {
+              maybeEmit({
+                type: 'state_diff',
+                path: key,
+                prev: beforeState[key],
+                next: afterState[key],
+              })
+            }
           }
         }
+      } catch (error) {
+        console.warn('Redux collector failed to process dispatched action', error)
       }
 
       return result

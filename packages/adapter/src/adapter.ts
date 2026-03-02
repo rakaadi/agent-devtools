@@ -1,66 +1,20 @@
 import { createRingBuffer, createSnapshotSlot, type RingBuffer, type SnapshotSlot } from './buffer/ring-buffer.ts'
-import { createMmkvCollector, type MmkvCollectorEvent, type MmkvInstance } from './collectors/mmkv.ts'
+import { createMmkvCollector, type MmkvCollectorEvent } from './collectors/mmkv.ts'
 import { createNavigationCollector, type NavigationCollectorEvent } from './collectors/navigation.ts'
 import { createReduxCollector, type ReduxCollectorEvent } from './collectors/redux.ts'
 import { createWsClient, type WsClient } from './transport/ws-client.ts'
 import { uuid } from './utils/uuid.ts'
-import type { DebugEvent } from '@agent-devtools/shared'
-
-type StreamName = 'redux' | 'navigation' | 'mmkv'
+import type { DebugEvent, StreamName } from '@agent-devtools/shared'
+import type { DebugAdapterHandle, InitDebugAdapterOptions } from './types.ts'
 
 type CollectorEvent = ReduxCollectorEvent | NavigationCollectorEvent | MmkvCollectorEvent
 
-type StoreLike = Record<string, unknown>
-
-type NavigationRef = {
-  addListener: (event: 'state', listener: () => void) => () => void
-  getCurrentRoute: () => { name: string, params?: Record<string, unknown> } | undefined
-  getRootState: () => {
-    routes: Array<{ name: string, params?: Record<string, unknown> }>
-    index: number
-    stale: boolean
-  }
-  isReady: () => boolean
-}
-
-interface DebugEventEnvelope {
-  stream: StreamName
-  event: DebugEvent['event']
-  timestamp: string
-  seq: number
-  sessionId: string
-  payload: Record<string, unknown>
-  meta: {
-    source: string
-    adapterVersion: string
-    truncated: boolean
-    originalSize?: number
-  }
-}
-
-interface AdapterConfig {
-  serverUrl?: string
-}
-
-interface InitDebugAdapterOptions {
-  store?: StoreLike
-  navigationRef?: NavigationRef
-  mmkvInstances?: Record<string, MmkvInstance>
-  config?: AdapterConfig
-}
-
-export interface DebugAdapterHandle {
-  captureSnapshot: (stream?: StreamName) => void
-  destroy: () => void
-  isConnected: () => boolean
-}
-
 const ADAPTER_VERSION = '0.0.0'
-const DEFAULT_SERVER_URL = 'ws://localhost:19850'
+const DEFAULT_SERVER_URL = 'ws://127.0.0.1:19850'
 
 let activeAdapter: DebugAdapterHandle | null = null
 
-function validateConfig(config?: AdapterConfig): AdapterConfig {
+function validateConfig(config?: InitDebugAdapterOptions['config']): InitDebugAdapterOptions['config'] {
   if (!config?.serverUrl) {
     return {}
   }
@@ -72,7 +26,7 @@ function validateConfig(config?: AdapterConfig): AdapterConfig {
   return config
 }
 
-function createNoopHandle(): DebugAdapterHandle {
+export function createNoopHandle(): DebugAdapterHandle {
   return {
     captureSnapshot: () => {},
     destroy: () => {},
@@ -93,18 +47,18 @@ export function initDebugAdapter(options: InitDebugAdapterOptions): DebugAdapter
   const config = validateConfig(options.config)
   const sessionId = uuid()
 
-  const ringBuffer: RingBuffer<DebugEventEnvelope> = createRingBuffer()
-  const snapshots: Record<StreamName, SnapshotSlot<DebugEventEnvelope>> = {
-    redux: createSnapshotSlot<DebugEventEnvelope>(),
-    navigation: createSnapshotSlot<DebugEventEnvelope>(),
-    mmkv: createSnapshotSlot<DebugEventEnvelope>(),
+  const ringBuffer: RingBuffer<DebugEvent> = createRingBuffer()
+  const snapshots: Record<StreamName, SnapshotSlot<DebugEvent>> = {
+    redux: createSnapshotSlot<DebugEvent>(),
+    navigation: createSnapshotSlot<DebugEvent>(),
+    mmkv: createSnapshotSlot<DebugEvent>(),
   }
 
   const collectors: Partial<Record<StreamName, { captureSnapshot: () => void, destroy: () => void }>> = {}
 
   const emitFromCollector = (stream: StreamName, rawEvent: CollectorEvent): void => {
     const { type, ...payload } = rawEvent
-    const envelope: DebugEventEnvelope = {
+    const envelope: DebugEvent = {
       stream,
       event: type,
       timestamp: new Date().toISOString(),
@@ -137,7 +91,7 @@ export function initDebugAdapter(options: InitDebugAdapterOptions): DebugAdapter
   }
 
   const wsClient: WsClient = createWsClient({
-    serverUrl: config.serverUrl ?? DEFAULT_SERVER_URL,
+    serverUrl: config?.serverUrl ?? DEFAULT_SERVER_URL,
     sessionId,
     adapterVersion: ADAPTER_VERSION,
     enabledStreams: (Object.keys(collectors) as StreamName[]),
@@ -186,6 +140,10 @@ export function initDebugAdapter(options: InitDebugAdapterOptions): DebugAdapter
     },
     isConnected: () => wsClient.isConnected(),
   }
+
+  void wsClient.connect().catch(error => {
+    console.warn('Debug adapter failed to connect to MCP server', error)
+  })
 
   activeAdapter = handle
   return handle

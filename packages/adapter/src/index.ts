@@ -1,28 +1,8 @@
-import { initDebugAdapter as initDebugAdapterCore } from './adapter.ts'
+import { initDebugAdapter as initDebugAdapterCore, createNoopHandle } from './adapter.ts'
 import { createReduxCollector } from './collectors/redux.ts'
-import type { MmkvInstance } from './collectors/mmkv.ts'
-import type { AdapterConfig, DebugAdapterHandle, NavigationContainerRef, ReduxStore } from './types.ts'
+import type { ActionLike, DebugAdapterHandle, InitDebugAdapterOptions, Middleware } from './types.ts'
 
-type DebugAction = {
-  type: string
-  [key: string]: unknown
-}
-
-type MiddlewareApi = {
-  getState: () => Record<string, unknown>
-  dispatch: (action: DebugAction) => DebugAction
-}
-
-type DebugMiddleware = (
-  api: MiddlewareApi,
-) => (next: (action: DebugAction) => DebugAction) => (action: DebugAction) => DebugAction
-
-interface InitDebugAdapterOptions {
-  store?: ReduxStore
-  navigationRef?: NavigationContainerRef
-  mmkvInstances?: Record<string, MmkvInstance>
-  config?: AdapterConfig
-}
+type DebugMiddleware = Middleware<Record<string, unknown>, ActionLike>
 
 type UseEffectLike = (effect: () => void | (() => void), deps: unknown[]) => void
 
@@ -30,14 +10,6 @@ const MIDDLEWARE_ATTACHED_SYMBOL = Symbol.for('agent-devtools:middleware-attache
 
 function isDevEnabled(): boolean {
   return (globalThis as { __DEV__?: boolean }).__DEV__ !== false
-}
-
-function createNoopHandle(): DebugAdapterHandle {
-  return {
-    captureSnapshot: () => {},
-    destroy: () => {},
-    isConnected: () => false,
-  }
 }
 
 function resolveUseEffect(): UseEffectLike | null {
@@ -84,11 +56,11 @@ export function createDebugMiddleware(): DebugMiddleware {
     return createNoopMiddleware()
   }
 
-  const collector = createReduxCollector<Record<string, unknown>, DebugAction>(() => {})
+  const collector = createReduxCollector<Record<string, unknown>, ActionLike>(() => {})
   return api => {
-    ;(api as Record<PropertyKey, unknown>)[MIDDLEWARE_ATTACHED_SYMBOL] = true
+    ;(api as unknown as Record<PropertyKey, unknown>)[MIDDLEWARE_ATTACHED_SYMBOL] = true
     return collector.middleware(api)
   }
 }
 
-export type { AdapterConfig, DebugAdapterHandle, NavigationContainerRef, ReduxStore } from './types.ts'
+export type { ActionLike, AdapterConfig, DebugAdapterHandle, InitDebugAdapterOptions, NavigationContainerRef, ReduxStore } from './types.ts'

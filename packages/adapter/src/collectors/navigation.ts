@@ -1,17 +1,12 @@
+import type { NavigationContainerRef } from '../types.ts'
+
 export interface NavigationCollectorEvent {
   type: 'route_change' | 'navigation_snapshot'
   [key: string]: unknown
 }
 
-interface NavigationRef {
-  addListener: (event: 'state', listener: () => void) => () => void
-  getCurrentRoute: () => { name: string, params?: Record<string, unknown> } | undefined
-  getRootState: () => { routes: Array<{ name: string, params?: Record<string, unknown> }>, index: number, stale: boolean }
-  isReady: () => boolean
-}
-
 export function createNavigationCollector(
-  navigationRef: NavigationRef,
+  navigationRef: NavigationContainerRef,
   emit: (event: NavigationCollectorEvent) => void,
 ): {
   captureSnapshot: () => void
@@ -34,15 +29,19 @@ export function createNavigationCollector(
       return
     }
 
-    const route = navigationRef.getCurrentRoute()
-    const rootState = navigationRef.getRootState()
-    maybeEmit({
-      type: 'route_change',
-      routeName: route?.name ?? 'unknown',
-      params: route?.params ?? null,
-      navigationType: 'unknown',
-      stackDepth: rootState.routes.length,
-    })
+    try {
+      const route = navigationRef.getCurrentRoute()
+      const rootState = navigationRef.getRootState()
+      maybeEmit({
+        type: 'route_change',
+        routeName: route?.name ?? 'unknown',
+        params: route?.params ?? null,
+        navigationType: 'unknown',
+        stackDepth: rootState.routes.length,
+      })
+    } catch (error) {
+      console.warn('Navigation collector failed to emit route change', error)
+    }
   }
 
   const subscribeToState = (): void => {
@@ -70,13 +69,21 @@ export function createNavigationCollector(
   }
 
   const captureSnapshot = (): void => {
-    const state = navigationRef.getRootState()
-    maybeEmit({
-      type: 'navigation_snapshot',
-      routes: state.routes,
-      index: state.index,
-      stale: state.stale,
-    })
+    if (!active) {
+      return
+    }
+
+    try {
+      const state = navigationRef.getRootState()
+      maybeEmit({
+        type: 'navigation_snapshot',
+        routes: state.routes,
+        index: state.index,
+        stale: state.stale,
+      })
+    } catch (error) {
+      console.warn('Navigation collector failed to capture snapshot', error)
+    }
   }
 
   const destroy = (): void => {

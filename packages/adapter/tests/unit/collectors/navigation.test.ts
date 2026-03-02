@@ -156,6 +156,58 @@ describe('createNavigationCollector', () => {
     collector.destroy()
   })
 
+  it('does not crash when getCurrentRoute throws during state change and logs the failure', () => {
+    const emit = vi.fn()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const navigationRef = createMockNavigationRef({
+      ready: true,
+      currentRoute: { name: 'Home' },
+      rootState: {
+        routes: [{ name: 'Home' }],
+        index: 0,
+        stale: false,
+      },
+    })
+
+    const collector = createNavigationCollector(navigationRef, emit)
+
+    vi.spyOn(navigationRef, 'getCurrentRoute').mockImplementation(() => {
+      throw new Error('getCurrentRoute boom')
+    })
+    expect(() => navigationRef.emitState()).not.toThrow()
+    expect(emit).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    collector.destroy()
+  })
+
+  it('does not crash when getRootState throws during captureSnapshot and logs the failure', () => {
+    const emit = vi.fn()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const navigationRef = createMockNavigationRef({
+      ready: true,
+      currentRoute: { name: 'Home' },
+      rootState: {
+        routes: [{ name: 'Home' }],
+        index: 0,
+        stale: false,
+      },
+    })
+
+    const collector = createNavigationCollector(navigationRef, emit)
+
+    vi.spyOn(navigationRef, 'getRootState').mockImplementation(() => {
+      throw new Error('getRootState boom')
+    })
+    expect(() => collector.captureSnapshot()).not.toThrow()
+    expect(emit).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalled()
+
+    warnSpy.mockRestore()
+    collector.destroy()
+  })
+
   it('destroy unsubscribes and prevents further emissions', () => {
     const emit = vi.fn()
     const navigationRef = createMockNavigationRef({

@@ -10,10 +10,6 @@ function createConfig(serverUrl: string): {
   enabledStreams: string[]
   deviceInfo: { platform: string }
   connectTimeout: number
-  reconnectBaseDelay: number
-  reconnectMaxDelay: number
-  maxMessageSize: number
-  debug: boolean
 } {
   return {
     serverUrl,
@@ -22,10 +18,6 @@ function createConfig(serverUrl: string): {
     enabledStreams: ['redux'],
     deviceInfo: { platform: 'test' },
     connectTimeout: 500,
-    reconnectBaseDelay: 10,
-    reconnectMaxDelay: 100,
-    maxMessageSize: 512 * 1024,
-    debug: false,
   }
 }
 
@@ -59,8 +51,8 @@ describe('createWsClient', () => {
 
   it('rejects server URLs that do not start with ws:// or wss://', () => {
     expect(() => createWsClient(
-      createConfig('http://127.0.0.1:19850') as never,
-      createHandlers() as never,
+      createConfig('http://127.0.0.1:19850'),
+      createHandlers(),
     )).toThrow(/wss?:\/\//)
   })
 
@@ -68,11 +60,7 @@ describe('createWsClient', () => {
     server = new MockWsServer()
     await server.start()
 
-    const client = createWsClient(createConfig(server.url) as never, createHandlers() as never) as {
-      connect: () => Promise<void>
-      disconnect: () => Promise<void> | void
-      isConnected: () => boolean
-    }
+    const client = createWsClient(createConfig(server.url), createHandlers())
 
     await client.connect()
     const handshake = await server.waitForHandshake()
@@ -93,10 +81,7 @@ describe('createWsClient', () => {
     await server.start()
 
     const handlers = createHandlers()
-    const client = createWsClient(createConfig(server.url) as never, handlers as never) as {
-      connect: () => Promise<void>
-      disconnect: () => Promise<void> | void
-    }
+    const client = createWsClient(createConfig(server.url), handlers)
 
     await client.connect()
     await server.waitForHandshake()
@@ -118,11 +103,7 @@ describe('createWsClient', () => {
     server = new MockWsServer()
     await server.start()
 
-    const client = createWsClient(createConfig(server.url) as never, createHandlers() as never) as {
-      connect: () => Promise<void>
-      disconnect: () => Promise<void> | void
-      send: (event: Record<string, unknown>) => void
-    }
+    const client = createWsClient(createConfig(server.url), createHandlers())
 
     await client.connect()
     await server.waitForHandshake()
@@ -167,13 +148,9 @@ describe('createWsClient', () => {
     })
 
     const client = createWsClient(
-      createConfig(`ws://127.0.0.1:${address.port}`) as never,
-      createHandlers() as never,
-    ) as {
-      connect: () => Promise<void>
-      disconnect: () => Promise<void> | void
-      isConnected: () => boolean
-    }
+      createConfig(`ws://127.0.0.1:${address.port}`),
+      createHandlers(),
+    )
 
     await expect(client.connect()).resolves.not.toThrow()
     await new Promise(resolve => setTimeout(resolve, 50))
@@ -197,12 +174,7 @@ describe('createWsClient', () => {
     await server.start()
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const client = createWsClient(createConfig(server.url) as never, createHandlers() as never) as {
-      connect: () => Promise<void>
-      disconnect: () => Promise<void> | void
-      isConnected: () => boolean
-      send: (event: Record<string, unknown>) => void
-    }
+    const client = createWsClient(createConfig(server.url), createHandlers())
 
     await expect(client.connect()).resolves.not.toThrow()
     client.send({

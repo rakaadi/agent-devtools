@@ -46,7 +46,7 @@ vi.mock('../../src/utils/uuid.ts', () => ({
   uuid: mocks.uuid,
 }))
 
-interface AppState {
+type AppState = {
   counter: number
 }
 
@@ -132,7 +132,7 @@ describe('initDebugAdapter', () => {
     }))
 
     mocks.createWsClient.mockImplementation(() => ({
-      connect: vi.fn(),
+      connect: vi.fn(() => Promise.resolve()),
       disconnect: vi.fn(),
       send: vi.fn(),
       isConnected: vi.fn(() => true),
@@ -163,6 +163,17 @@ describe('initDebugAdapter', () => {
     expect(mocks.createWsClient).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: 'session-123',
+      }),
+      expect.any(Object),
+    )
+  })
+
+  it('uses ws://127.0.0.1:19850 as the default server URL per spec', () => {
+    initDebugAdapter({ store: createStore() })
+
+    expect(mocks.createWsClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverUrl: 'ws://127.0.0.1:19850',
       }),
       expect.any(Object),
     )
@@ -208,7 +219,7 @@ describe('initDebugAdapter', () => {
 
     const wsSend = vi.fn()
     mocks.createWsClient.mockImplementation(() => ({
-      connect: vi.fn(),
+      connect: vi.fn(() => Promise.resolve()),
       disconnect: vi.fn(),
       send: wsSend,
       isConnected: vi.fn(() => true),
@@ -281,13 +292,13 @@ describe('initDebugAdapter', () => {
 
     mocks.createWsClient
       .mockImplementationOnce(() => ({
-        connect: vi.fn(),
+        connect: vi.fn(() => Promise.resolve()),
         disconnect: firstDisconnect,
         send: vi.fn(),
         isConnected: vi.fn(() => true),
       }))
       .mockImplementationOnce(() => ({
-        connect: vi.fn(),
+        connect: vi.fn(() => Promise.resolve()),
         disconnect: secondDisconnect,
         send: vi.fn(),
         isConnected: vi.fn(() => true),
@@ -301,6 +312,50 @@ describe('initDebugAdapter', () => {
     expect(secondCollectorDestroy).not.toHaveBeenCalled()
     expect(secondDisconnect).not.toHaveBeenCalled()
     expect(second).not.toBe(first)
+  })
+
+  it('initiates WebSocket connection on init per spec lifecycle', () => {
+    const wsConnect = vi.fn(() => Promise.resolve())
+
+    mocks.createWsClient.mockImplementation(() => ({
+      connect: wsConnect,
+      disconnect: vi.fn(),
+      send: vi.fn(),
+      isConnected: vi.fn(() => false),
+    }))
+
+    initDebugAdapter({ store: createStore() })
+
+    expect(wsConnect).toHaveBeenCalledTimes(1)
+  })
+
+  it('swallows connect rejection without propagating errors', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const connectError = new Error('connection refused')
+    const connectPromise = Promise.reject(connectError)
+    // Attach a no-op catch to prevent the test runner from flagging
+    // the base promise — we verify the adapter's own catch below.
+    connectPromise.catch(() => {})
+
+    const wsConnect = vi.fn(() => connectPromise)
+
+    mocks.createWsClient.mockImplementation(() => ({
+      connect: wsConnect,
+      disconnect: vi.fn(),
+      send: vi.fn(),
+      isConnected: vi.fn(() => false),
+    }))
+
+    // initDebugAdapter is synchronous — must not throw despite connect rejection
+    const handle = initDebugAdapter({ store: createStore() })
+
+    // Flush microtask queue so the rejected promise settles
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(wsConnect).toHaveBeenCalledTimes(1)
+    expect(warnSpy).toHaveBeenCalledWith('Debug adapter failed to connect to MCP server', connectError)
+    expect(handle.isConnected()).toBe(false)
+    expect(() => handle.destroy()).not.toThrow()
   })
 
   it('cleans up collectors and transport on destroy', () => {
@@ -320,7 +375,7 @@ describe('initDebugAdapter', () => {
     }))
 
     mocks.createWsClient.mockImplementation(() => ({
-      connect: vi.fn(),
+      connect: vi.fn(() => Promise.resolve()),
       disconnect: wsDisconnect,
       send: vi.fn(),
       isConnected: vi.fn(() => true),
