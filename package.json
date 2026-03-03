@@ -12,14 +12,19 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:server": "bun run --filter @agent-devtools/server test",
+    "test:adapter": "bun run --filter @agent-devtools/adapter test",
+    "test:coverage:server": "bun run --filter @agent-devtools/server test:coverage",
+    "test:coverage:adapter": "bun run --filter @agent-devtools/adapter test:coverage"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@stylistic/eslint-plugin": "^5.9.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "@vitest/eslint-plugin": "^1.6.9",
     "eslint": "^10.0.1",
     "globals": "^17.3.0",
-    "@vitest/eslint-plugin": "^1.6.9",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.7",
     "typescript": "^5.9.3",

@@ -15,7 +15,8 @@
   "scripts": {
     "build": "tsc --project tsconfig.build.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@agent-devtools/shared": "workspace:*"
